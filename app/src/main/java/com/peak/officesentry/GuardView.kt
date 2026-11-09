@@ -232,6 +232,7 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
             GuardMood.IDLE -> look
             else -> 0
         }
+        overlayShade = true
         eyes(eyeMode, eyeLook)
         brows(stern && mood != GuardMood.SLEEPING)
         val talking = mood == GuardMood.SPEAKING && (now / 140) % 2 == 0L
@@ -240,30 +241,40 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
             stern && mood != GuardMood.SLEEPING -> MouthMode.FROWN
             else -> MouthMode.CLOSED
         })
+        overlayShade = false
     }
 
-    private fun put(x: Int, y: Int, ch: Char) { if (x in 0 until N && y in 0 until N) face[y][x] = ch }
+    private var overlayShade = false
+
+    /** Overlay pixels on the shadow side (x >= 31, dithered at 30) are darkened to match the torchlight. */
+    private fun put(x: Int, y: Int, ch: Char) {
+        if (x !in 0 until N || y !in 0 until N) return
+        val c = if (overlayShade && (x >= 31 || (x == 30 && (x + y) % 2 == 0))) SHADOW[ch] ?: ch else ch
+        face[y][x] = c
+    }
 
     private enum class EyeMode { OPEN, CLOSED, WIDE }
     private enum class MouthMode { CLOSED, OPEN, FROWN }
 
     private fun eyes(mode: EyeMode, look: Int) {
         for (ex in intArrayOf(16, 27)) {
+            val white = if (ex == 16) 'E' else 'e'   // right eye sits in shadow
             if (mode == EyeMode.CLOSED) {
-                for (x in ex until ex + 5) put(x, 24, 'n')
-                put(ex, 23, 'f'); put(ex + 4, 23, 'f')
+                for (x in ex until ex + 5) { put(x, 23, 'f'); put(x, 24, 'n') }
                 continue
             }
-            val wide = mode == EyeMode.WIDE
-            val top = if (wide) 22 else 23
-            for (y in top..25) for (x in ex until ex + 5) put(x, y, 'E')
-            put(ex, 25, 'f'); put(ex + 4, 25, 'f')
-            if (!wide) { put(ex, 23, 'f'); put(ex + 4, 23, 'f') }
+            val rows = if (mode == EyeMode.WIDE) intArrayOf(23, 24) else intArrayOf(24)
+            val lid = rows.first() - 1
+            for (x in ex until ex + 5) {
+                put(x, lid, 'n')                          // heavy hooded lid
+                for (y in rows) put(x, y, white)
+                put(x, rows.last() + 1, 'f')               // lower lid
+            }
+            put(ex, rows.last(), 'f'); put(ex + 4, rows.last(), 'f')
             val ix = ex + 1 + look
-            for (y in if (wide) 23..25 else 23..24) { put(ix, y, 'I'); put(ix + 1, y, 'I') }
-            put(ix + 1, 24, 'K')
-            if (wide) put(ix, 23, 'E')
-            for (x in ex until ex + 5) put(x, top - 1, 'n')
+            for (y in rows) { put(ix, y, 'I'); put(ix + 1, y, 'I') }
+            put(ix + 1, rows.last(), 'K')                  // pupil
+            if (mode == EyeMode.WIDE) put(ix, 23, 'H')     // catchlight
         }
     }
 
@@ -313,6 +324,8 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
         val GOLD = Color.rgb(212, 168, 64)
         val GOLD_D = Color.rgb(130, 96, 34)
 
+        val SHADOW = mapOf('L' to 'F', 'F' to 'f', 'f' to 'n', 'X' to 'f', 'W' to 'G', 'G' to 'g', 'g' to 'q', 'T' to 'G')
+
         val PAL = mapOf(
             'K' to Color.rgb(24, 18, 22),
             'H' to Color.rgb(220, 224, 228),
@@ -335,60 +348,65 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
             'N' to Color.rgb(196, 112, 92),
             'M' to Color.rgb(58, 26, 26),
             'T' to Color.rgb(226, 220, 200),
-            'E' to Color.rgb(236, 226, 204),
-            'I' to Color.rgb(78, 112, 146)
+            'E' to Color.rgb(214, 204, 184),
+            'I' to Color.rgb(78, 112, 146),
+            'L' to Color.rgb(234, 188, 146),
+            'e' to Color.rgb(170, 160, 146),
+            'q' to Color.rgb(84, 80, 80),
+            'O' to Color.rgb(214, 150, 96),
+            'k' to Color.rgb(40, 34, 40)
         )
 
-        /** Original 48x48 veteran guard portrait. Eyes, brows and mouth are overlays. */
+        /** Original 48x48 veteran guard portrait (torchlit from the left). Eyes, brows and mouth are overlays. */
         val BASE = arrayOf(
             "...................KKKKKKKKKK...................",
             "................KKKSSSSHSsSSSKKK................",
-            "..............KKSSSSSSSHSsSSSSSsKK..............",
-            "............KKSSSSSSSSSHSsSSSSSsssKK............",
-            "...........KSSSSHHHHSSSHSsSSSSSsssssK...........",
-            "..........KSSSSHHHHHHSSHSsSSSSSRssssdK..........",
-            ".........KSSSSSHHHHHHSSHSsSSSSSrRsssddK.........",
-            "........KSSSSSSSHHHHSSSHSsSSSSSsssssdddK........",
-            "........KSSSSSSSSSSSSSSHSsSSSSSsssssdddK........",
-            ".......KSSSSSSSSSSddSSSHSsSSSSSsssssddddK.......",
-            ".......KSSSSSSSSSdSSSSSHSsSSSSSsssssddddK.......",
-            "......KSSSSSRSSSSSSSSSSHSsSSSSSsssssrddddK......",
-            "......KSSSSSSrSSSSSSSSSHSsSSRSSsssssdddddK......",
-            "......KssssssssssssssssHSsssssssssssdddddK......",
-            "......KssssssssssssssssHSsssssssssssdddddK......",
-            "......KssssssssssssssssssssssssssssssssssK......",
-            "......KssHsssHsssHsssHsssHsssHsssHsssHsssK......",
-            "......KddddddddddddddddHsndddddddddddddddK......",
-            ".......KKCchCffffffffffHsnfffffffffhCCcKK.......",
-            "........KcDCcfFFFFFFFFFHsnFFXFFFFffCccDK........",
-            ".......KCcCChfFFFFFFFFFHsnFFFXFFFffChcCcK.......",
-            ".......KcDccCfFFFFFFFFFHsnFFFXFFFffcCDcDK.......",
-            "......KCcCchCfFfffffffFSsnfffffffffhCCcCcK......",
-            "......KcDcDCcfFFFFFFFFFSsnFFFFXFFffCccDcDK......",
-            "......KcCcCChfFfFFFFFFFSsnFFFFXFfffChcCcCK......",
-            ".....KcDcDccCfFFFFFFFFFSsnFFFFFXFffcCDcDcDK.....",
-            ".....KcCcCchCfFfffffffFSsnfffffXfffhCCcCcCK.....",
-            ".....KDcDcDCcfFFfFFFfFFsdnFfFFFfXffCccDcDcK.....",
-            ".....KCcCcCChfFXFfFFFFNNNNFFFFfFXffChcCcCcK.....",
-            ".....KcDcDccCfFFXFFGWWGWWGWWGFFXFffcCDcDcDK.....",
-            ".....KcCcCchCfFFFWGWWGWWGWWGWWGFFffhCCcCcCK.....",
-            ".....KDcDcDCcfFWGGWGGWGGWGGWGGWGGffCccDcDcK.....",
-            ".....KCcCcCChfGGGGGGggggggggGGGGGGfChcCcCcK.....",
-            ".....KcDcDccCfGGGGGGGGGGWGGGGGGGGGfcCDcDcDK.....",
-            ".....KcCcCchCfGGGGGGGGWGGGGGGGGGGGfhCCcCcCK.....",
-            "......KcDcDCcfGGGGGGWGGGGGGGGWGGGGfCccDcDK......",
-            "......KcCcCChfFFgGWGGGGGGGGWGGGgFffChcCcCK......",
-            "......KDcDccCfFFgGgGGgGGgWGgGGggFffcCDcDcK......",
-            ".......KcCchChCFFggGGgGWgGGgGGgFFhChCCcCK.......",
-            "......KKDcDCcCcFFFgGGWGGgGGgGgFFFCcCccDcKK......",
-            ".....KCcCcCChChCFFFgGgGGgGGggFFFhChChcCcCcK.....",
-            ".....KcDcDccCcCcFFFFggGGgGWgFFFFCcCcCDcDcDK.....",
-            "....KCcCcrchChChChChCgGGWGghChChChChCCrCcCcK....",
-            "....KcDcDrDCcCcCcCcCcCgGggcCcCcCcCcCccrcDcDK....",
-            "...KCcCcCrCChChChChChChChChChChChChChcrcCcCcK...",
-            "...KcDcDcDrcCcCcCcCcCcCcCcCcCcCcCcCcCrcDcDcDK...",
-            "..KCcCcCcCrhChChChChChChChChChChChChCrcCcCcCcK..",
-            "..KcDcDcDcrCcCcCcCcCcCcCcCcCcCcCcCcCcrDcDcDcDK..",
+            "..............KKSSSSSSSHSsSSSSsdKK..............",
+            "............KKSSSSSSSSSHSsSSSSSdddKK............",
+            "...........KSSSSHHHHSSSHSsSSSSsdddddK...........",
+            "..........KSSSSHHHHHHSSHSsSSSSSRddddkK..........",
+            ".........KSOSSSHHHHHHSSHSsSSSSsrRdddkkK.........",
+            "........KSOSSSSSHHHHSSSHSsSSSSSdddddkkkK........",
+            "........KSSSSSSSSSSSSSSHSsSSSSsdddddkkkK........",
+            ".......KSOSSSSSSSSddSSSHSsSSSSSdddddkkkkK.......",
+            ".......KSOSSSSSSSdSSSSSHSsSSSSsdddddkkkkK.......",
+            "......KSOSSSRSSSSSSSSSSHSsSSSSSdddddrkkkkK......",
+            "......KSOSSSSrSSSSSSSSSHSsSSRSsdddddkkkkkK......",
+            "......KOsssssssssssssssHSssssssdddddkkkkkK......",
+            "......KOsssssssssssssssHSsssssddddddkkkkkK......",
+            "......KssssssssssssssssssssssssddddddkkkkK......",
+            "......KssHsssHsssHsssHsssHsssHdddSddkskkkK......",
+            "......KddddddddddddddddHsndddddkkkkkkkkkkK......",
+            ".......KKCchCffffffffffHsnffffnnnnnCDDkKK.......",
+            "........KcDCcfLLLfFfFFFHsnFFfFfffnncDkkK........",
+            ".......KCcCChfLLLLLFFFFHsnFFFXfffnncckDkK.......",
+            ".......KcDccCfLLLLFLFFFHsnFFFXFffnnDckkkK.......",
+            "......KCcCchCfLnnnnnnnFSsnnnnnnnnnnCDDkDkK......",
+            "......KcDcDCcfLLLLFLFFFSsnnFFFXffnncDkkkkK......",
+            "......KcCcCChfLfLLLFFFFSsnnFFFffnnncckDkDK......",
+            ".....KcDcDccCfLLLLFLFFFSsnnFFFFffnnDckkkkkK.....",
+            ".....KcCcCchCfLfffffffFSsnnfnfnfnnnCDDkDkDK.....",
+            ".....KDcDcDCcfLLfLFLfLFsdnnfFFFnfnncDkkkkkK.....",
+            ".....KCcCcCChfLXLfLFFLNNNNFFFFnffnncckDkDkK.....",
+            ".....KcDcDccCfLLXLFGWWGWWGWWGFFffnnDckkkkkK.....",
+            ".....KcCcCchCfLLLWGWWGWWGWWGWWgffnnCDDkDkDK.....",
+            ".....KDcDcDCcfLWGGWGGWGGWGGWGGWggnncDkkkkkK.....",
+            ".....KCcCcCChfGGGGGGggggggggGGggggncckDkDkK.....",
+            ".....KcDcDccCfGGGGGGGGGGWGGGGGGgggnDckkkkkK.....",
+            ".....KcCcCchCfGGGGGGGGWGGGGGGGggggnCDDkDkDK.....",
+            "......KcDcDCcfGGGGGGWGGGGGGGGWGgggncDkkkkK......",
+            "......KcCcCChfFFgGWGGGGGGGGWGGgqfnncckDkDK......",
+            "......KDcDccCfFFgGgGGgGGgWGgGGgqfnnDckkkkK......",
+            ".......KcCchChCFFggGGgGWgGGgGGqffCcCDDkDK.......",
+            "......KKDcDCcCcFFFgGGWGGgGGgGgFffcDcDkkkKK......",
+            ".....KCcCcCChChCFFFgGgGGgGGggFffCcCcckDkDkK.....",
+            ".....KcDcDccCcCcFFFFggGGgGWgFFFfcDcDckkkkkK.....",
+            "....KCcCcrchChChChChCgGGWGghChcCcCcCDDrDkDkK....",
+            "....KcDcDrDCcCcCcCcCcCgGggcCcCccDcDcDkrkkkkK....",
+            "...KCcCcCrCChChChChChChChChChCCcCcCcckrkDkDkK...",
+            "...KcDcDcDrcCcCcCcCcCcCcCcCcCcCDcDcDcrkkkkkkK...",
+            "..KCcCcCcCrhChChChChChChChChChcCcCcCDrkDkDkDkK..",
+            "..KcDcDcDcrCcCcCcCcCcCcCcCcCcCccDcDcDrkkkkkkkK..",
         )
     }
 }
