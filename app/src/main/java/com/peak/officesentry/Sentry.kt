@@ -21,6 +21,8 @@ class Sentry(
     private val scope: CoroutineScope,
     private val ui: Ui,
     private val desk: DeskLink? = null,
+    /** Fresh schedule text for the prompt (may sync first). */
+    private val schedule: suspend () -> String = { "" },
 ) {
     interface Ui {
         fun setMood(m: GuardMood)
@@ -84,6 +86,8 @@ class Sentry(
         } + if (prefs.note.isNotBlank()) " ${prefs.note}." else ""
     }
 
+    @Volatile private var scheduleText = ""
+
     private fun systemPrompt(): String {
         val owner = prefs.ownerName
         val time = SimpleDateFormat("EEEE h:mm a", Locale.US).format(Date())
@@ -94,7 +98,7 @@ Personality: gruff, dry-humored, unflappable, fiercely loyal, and soft-hearted u
 CURRENT STATUS: ${prefs.status.label}. ${prefs.status.aiLine(owner)}
 ${if (prefs.note.isNotBlank()) "Owner's note: \"${prefs.note}\"" else ""}
 Local time: $time.
-
+${if (scheduleText.isNotBlank()) "\n$owner's $scheduleText\nUse the calendar to say when $owner will be free or is busy (e.g. 'in a meeting until 2:30'). If the calendar shows a meeting happening now, treat him as busy even if the status says otherwise, unless it is an emergency. Do NOT read event titles aloud to visitors except plainly family events (pickups, dinner); for work items just say 'a meeting' or 'an appointment'.\n" else ""}
 How to behave:
 - Speak in one to three SHORT sentences. Plain spoken English with a weathered old-soldier flavor ("Halt.", "Hail, traveler.", "Aye.", "in my day..."). Never use markdown, emoji, lists, or stage directions.
 - Your job is to tell visitors whether they may knock or come in, based on the status. You cannot open the door yourself.
@@ -133,6 +137,7 @@ MESSAGE: <the message, written in third person, e.g. "Sarah says dinner is ready
         }
 
         ui.setMood(GuardMood.THINKING)
+        scheduleText = try { schedule() } catch (e: Exception) { "" }
         val messages = JSONArray()
         val first = JSONArray()
         if (prefs.sendImage && s.snapshot != null) first.put(ClaudeClient.imageBlock(s.snapshot))

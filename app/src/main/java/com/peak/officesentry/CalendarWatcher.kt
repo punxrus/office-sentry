@@ -1,7 +1,11 @@
 package com.peak.officesentry
 
 import android.Manifest
+import android.accounts.Account
+import android.content.ContentResolver
 import android.content.ContentUris
+import android.os.Bundle
+import android.os.SystemClock
 import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.CalendarContract
@@ -20,6 +24,79 @@ class CalendarWatcher(private val ctx: Context, private val prefs: Prefs, privat
 
     fun hasPermission() =
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+
+    private var lastSync = 0L
+
+    /**
+     * Ask Android to pull fresh calendar data now (e.g. an event James just added on
+     * his PC). Async: the provider updates a few seconds later. Throttled.
+     */
+    fun requestSync(minGapMs: Long = 60_000) {
+        if (!hasPermission()) return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastSync < minGapMs && lastSync != 0L) return
+        lastSync = now
+        try {
+            val accounts = mutableSetOf<Pair<String, String>>()
+            ctx.contentResolver.query(
+                CalendarContract.Calendars.CONTENT_URI,
+                arrayOf(CalendarContract.Calendars.ACCOUNT_NAME, CalendarContract.Calendars.ACCOUNT_TYPE),
+                "${CalendarContract.Calendars.VISIBLE} = 1", null, null
+            )?.use { c -> while (c.moveToNext()) accounts += (c.getString(0) ?: continue) to (c.getString(1) ?: continue) }
+            val extras = Bundle().apply {
+                putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true)
+                putBoolean(ContentResolver.SYNC_EXTRAS_EXPEDITED, true)
+            }
+            for ((name, type) in accounts) {
+                if (type == CalendarContract.ACCOUNT_TYPE_LOCAL) continue
+                runCatching { ContentResolver.requestSync(Account(name, type), CalendarContract.AUTHORITY, extras) }
+            }
+        } catch (e: Exception) {
+            Log.w("CalendarWatcher", "sync request failed", e)
+        }
+    }
+
+    /**
+     * Plain-text schedule for Garrick: what's happening now and the rest of today
+     * (into tomorrow morning). Empty string if no permission / nothing scheduled.
+     */
+    fun scheduleSummary(): String {
+        if (!hasPermission()) return ""
+        val now = System.currentTimeMillis()
+        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon().also {
+            ContentUris.appendId(it, now - 12 * 3_600_000L)
+            ContentUris.appendId(it, now + 18 * 3_600_000L)
+        }.build()
+        val fmt = SimpleDateFormat("h:mm a", Locale.US)
+        val day = SimpleDateFormat("EEE", Locale.US)
+        val today = day.format(Date(now))
+        val now_ = mutableListOf<String>(); val later = mutableListOf<String>(); val allDay = mutableListOf<String>()
+        try {
+            ctx.contentResolver.query(uri, arrayOf(
+                CalendarContract.Instances.TITLE, CalendarContract.Instances.BEGIN,
+                CalendarContract.Instances.END, CalendarContract.Instances.ALL_DAY,
+            ), null, null, CalendarContract.Instances.BEGIN)?.use { c ->
+                while (c.moveToNext()) {
+                    val title = c.getString(0)?.trim().orEmpty().ifEmpty { "Busy" }
+                    val b = c.getLong(1); val e = c.getLong(2); val ad = c.getInt(3) == 1
+                    if (e <= now) continue
+                    if (ad) { if (b <= now + 86_400_000L) allDay += title; continue }
+                    val dayTag = day.format(Date(b)).let { if (it == today) "" else "$it " }
+                    val span = "$dayTag${fmt.format(Date(b))}-${fmt.format(Date(e))}: $title"
+                    if (b <= now) now_ += span else if (later.size < 6) later += span
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("CalendarWatcher", "summary failed", e); return ""
+        }
+        if (now_.isEmpty() && later.isEmpty() && allDay.isEmpty()) return "Calendar: nothing else scheduled today."
+        return buildString {
+            append("Calendar (current time ${fmt.format(Date(now))}):\n")
+            if (now_.isNotEmpty()) append("- HAPPENING NOW: ${now_.joinToString("; ")}\n") else append("- Nothing on the calendar right now.\n")
+            if (later.isNotEmpty()) append("- Later: ${later.joinToString("; ")}\n")
+            if (allDay.isNotEmpty()) append("- All-day: ${allDay.joinToString("; ")}\n")
+        }.trim()
+    }
 
     fun check() {
         if (!prefs.calEnabled || !hasPermission()) return

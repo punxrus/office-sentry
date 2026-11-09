@@ -45,14 +45,28 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
     private var look = 0
     private var nextLook = SystemClock.uptimeMillis() + 4000
 
+    /** Screen-sleep: draw pure black and stop the animation loop entirely (saves CPU/GPU). */
+    var blackout: Boolean = false
+        set(v) {
+            if (field == v) return
+            field = v
+            removeCallbacks(ticker)
+            if (!v) post(ticker)
+            invalidate()
+        }
+
     private val ticker = object : Runnable {
-        override fun run() { invalidate(); postDelayed(this, 110) }
+        override fun run() {
+            if (blackout) return
+            invalidate(); postDelayed(this, 110)
+        }
     }
 
     override fun onAttachedToWindow() { super.onAttachedToWindow(); post(ticker) }
     override fun onDetachedFromWindow() { removeCallbacks(ticker); super.onDetachedFromWindow() }
 
     override fun onDraw(c: Canvas) {
+        if (blackout) { c.drawColor(Color.BLACK); return }
         val w = width.toFloat(); val h = height.toFloat()
         val now = SystemClock.uptimeMillis()
         c.drawColor(Color.rgb(18, 14, 22))

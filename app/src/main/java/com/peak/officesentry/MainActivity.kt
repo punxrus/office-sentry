@@ -51,12 +51,20 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
         view = GuardView(this)
         setContentView(view)
         hideSystemUi()
+        runCatching { preferLowRefresh() }
 
         voice = Voice(this, prefs)
         val claude = ClaudeClient()
         desk = DeskLink(this, prefs, claude, lifecycleScope)
         calendar = CalendarWatcher(this, prefs, desk)
-        sentry = Sentry(prefs, voice, claude, lifecycleScope, this, desk)
+        sentry = Sentry(prefs, voice, claude, lifecycleScope, this, desk) {
+            // Someone is at the door: pull fresh calendar data, give it a moment, then read it.
+            withContext(Dispatchers.IO) {
+                calendar.requestSync(minGapMs = 20_000)
+                delay(1500)
+                calendar.scheduleSummary()
+            }
+        }
         refresh()
         view.bubbleText = sentry.idleText()
         setupOwnerGesture()
@@ -69,6 +77,13 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
             voices = { voice.voiceList() },
             engines = { voice.engines },
             onEngineChanged = { voice.buildTts(); desk.buildTts() },
+            faceJson = {
+                val m = detector?.metrics
+                val age = if (m == null) -1 else SystemClock.uptimeMillis() - m.at
+                if (m == null) "{\"seen\":false,\"minFace\":${prefs.minFaceFrac},\"maxYaw\":${prefs.maxYaw},\"asleep\":$dimmed}"
+                else "{\"seen\":true,\"ageMs\":$age,\"frac\":${m.frac},\"yaw\":${m.yaw},\"pitch\":${m.pitch},\"bothEyes\":${m.bothEyes},\"engaged\":${m.engaged},\"minFace\":${prefs.minFaceFrac},\"maxYaw\":${prefs.maxYaw},\"asleep\":$dimmed}"
+            },
+            onCalibrate = { calibrate() },
             desk = desk,
             liveState = {
                 val seen = detector?.lastFaceSeen ?: 0L
@@ -80,8 +95,12 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
         requestPerms()
         startIdleLoop()
         lifecycleScope.launch {
+            var n = 0
             while (true) {
-                withContext(Dispatchers.IO) { calendar.check() }
+                withContext(Dispatchers.IO) {
+                    if (n++ % 15 == 0) calendar.requestSync(minGapMs = 0)   // every 15 min, catch new events
+                    calendar.check()
+                }
                 delay(60_000)
             }
         }
@@ -103,10 +122,19 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
 
     private fun startCamera() {
         detector?.shutdown()
-        detector = Detector(this,
+        detector = Detector(this, prefs,
             onVisitor = { s -> runOnUiThread { handleVisitor(s) } },
-            onActivity = { lastActivity = SystemClock.uptimeMillis(); if (dimmed) runOnUiThread { wake() } },
-        ).also { it.start(this, prefs.frontCamera) }
+            onActivity = {
+                lastActivity = SystemClock.uptimeMillis()
+                if (dimmed) runOnUiThread { wake() }
+                // someone appeared: start a calendar sync early so it's fresh if they come to the door
+                calendar.requestSync()
+            },
+        ).also {
+            it.intervalMs = if (dimmed) SLEEP_INTERVAL else AWAKE_INTERVAL
+            it.onCalibrated = { frac -> runOnUiThread { finishCalibration(frac) } }
+            it.start(this, prefs.frontCamera)
+        }
     }
 
     private fun handleVisitor(s: Sighting) {
@@ -137,24 +165,70 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
         view.footer = if (ip != null) "$ip:$PORT" else "no Wi-Fi"
     }
 
-    // ---------------- idle dimming / sleeping ----------------
+    // ---------------- screen sleep (camera keeps watching) ----------------
+    // After prefs.sleepAfterSec with no faces: screen goes black at minimum backlight,
+    // the view stops redrawing, and the camera checks less often. Any face wakes it.
+    // (The display is not switched fully off: Android would pause the camera.)
 
     private fun startIdleLoop() = lifecycleScope.launch {
+        var ticks = 0
         while (true) {
-            delay(5000)
+            delay(2000)
             val idleMs = SystemClock.uptimeMillis() - lastActivity
-            if (!sentry.busy && idleMs > 120_000) {
-                if (view.mood == GuardMood.IDLE) view.mood = GuardMood.SLEEPING
-                if (prefs.dimWhenIdle && !dimmed) setBrightness(0.05f).also { dimmed = true }
-            }
-            refresh()
+            if (!sentry.busy && !dimmed && prefs.dimWhenIdle && idleMs > prefs.sleepAfterSec * 1000L) sleepScreen()
+            if (!dimmed && ++ticks % 3 == 0) refresh()
         }
+    }
+
+    private fun sleepScreen() {
+        dimmed = true
+        view.mood = GuardMood.SLEEPING
+        view.blackout = true
+        setBrightness(0f)
+        detector?.intervalMs = SLEEP_INTERVAL
     }
 
     private fun wake() {
         lastActivity = SystemClock.uptimeMillis()
+        if (dimmed) {
+            dimmed = false
+            view.blackout = false
+            setBrightness(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE)
+            detector?.intervalMs = AWAKE_INTERVAL
+            refresh()
+        }
         if (view.mood == GuardMood.SLEEPING) view.mood = GuardMood.IDLE
-        if (dimmed) { setBrightness(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE); dimmed = false }
+    }
+
+    /** Lower refresh rate (the G Power runs at 120 Hz by default): a static pixel scene doesn't need it. */
+    private fun preferLowRefresh() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val d = display ?: return
+        val cur = d.mode
+        val low = d.supportedModes
+            .filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }
+            .minByOrNull { kotlin.math.abs(it.refreshRate - 60f) } ?: return
+        window.attributes = window.attributes.apply { preferredDisplayModeId = low.modeId }
+    }
+
+    // ---------------- distance calibration ----------------
+
+    fun calibrate() {
+        wake()
+        sentry.announce("Stand where a visitor would stand, and look at me. Hold still.")
+        lifecycleScope.launch {
+            delay(5000)
+            detector?.startCalibration(4000)
+        }
+    }
+
+    private fun finishCalibration(frac: Float?) {
+        if (frac == null) {
+            sentry.announce("I could not see your face. Try again, closer to the light.")
+            return
+        }
+        prefs.minFaceFrac = frac * 0.85f
+        sentry.announce("Done. I shall speak to anyone who comes that close.")
     }
 
     private fun setBrightness(v: Float) {
@@ -230,7 +304,7 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
 
     private fun showMenu() {
         val items = Status.values().map { "Status: ${it.label}" } +
-            listOf("Set note…", "Messages (${prefs.messages().size})…", "Settings…", "Test visitor conversation", "Voice…",
+            listOf("Set note…", "Messages (${prefs.messages().size})…", "Settings…", "Test visitor conversation", "Voice…", "Calibrate visitor distance",
                 if (isPinned) "Kiosk mode: ON (locked)" else "Turn on kiosk mode (lock to this app)",
                 "Exit to home screen")
         AlertDialog.Builder(this).setTitle("Office Sentry  •  ${ControlServer.localIp() ?: "?"}:$PORT")
@@ -243,7 +317,8 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
                     i == n + 2 -> settingsDialog()
                     i == n + 3 -> sentry.onVisitor(Sighting(1, emptyList(), null))
                     i == n + 4 -> engineDialog()
-                    i == n + 5 -> if (!isPinned) enterKiosk()
+                    i == n + 5 -> calibrate()
+                    i == n + 6 -> if (!isPinned) enterKiosk()
                     else -> exitToHome()
                 }
             }.show()
@@ -360,5 +435,9 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
         super.onDestroy()
     }
 
-    companion object { const val PORT = 8080 }
+    companion object {
+        const val PORT = 8080
+        const val AWAKE_INTERVAL = 350L
+        const val SLEEP_INTERVAL = 900L
+    }
 }

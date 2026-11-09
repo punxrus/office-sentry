@@ -15,35 +15,58 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.google.mlkit.vision.face.FaceLandmark
 import com.google.mlkit.vision.label.ImageLabeling
 import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 
 /** What the camera saw at the moment a visitor was confirmed. */
 data class Sighting(val faces: Int, val labels: List<String>, val snapshot: Bitmap?, val pet: String? = null)
 
+/** Live measurements of the largest face in view (for the control page readout + calibration). */
+data class FaceMetrics(
+    val frac: Float,        // face width / frame width (bigger = closer)
+    val yaw: Float,         // head turned left/right, degrees (0 = facing the camera)
+    val pitch: Float,       // head tilted up/down, degrees
+    val bothEyes: Boolean,  // both eye landmarks found and open
+    val engaged: Boolean,   // meets every rule to be spoken to
+    val at: Long,           // uptimeMillis
+)
+
 /**
  * On-device presence detection with ML Kit (no network, no cost).
- * - Face detection every ~400 ms. A face in 3 consecutive frames = visitor.
- * - Image labeling every ~2 s to catch pets (dogs/cats have no human face) and
- *   to give Claude extra hints (glasses, mug, hat...).
+ *
+ * Two levels:
+ *  - ANY face  -> [onActivity] (wakes the screen so the status is visible)
+ *  - ENGAGED   -> [onVisitor]  (Garrick speaks). A face is engaged only when it is
+ *    close enough (face width >= [Prefs.minFaceFrac] of the frame), facing the door
+ *    (|yaw| and |pitch| <= [Prefs.maxYaw]) and both eyes are visible and open,
+ *    for ~1 second in a row. People walking past in profile, or far down the hall
+ *    (e.g. heading to another room), never trigger a conversation.
  */
 class Detector(
     private val ctx: Context,
+    private val prefs: Prefs,
     private val onVisitor: (Sighting) -> Unit,
     private val onActivity: () -> Unit,
 ) {
     private val exec = Executors.newSingleThreadExecutor()
     private val busy = AtomicBoolean(false)
     @Volatile var armed = true
+    /** Frame interval: ~350 ms awake, slower while the screen sleeps to save power. */
+    @Volatile var intervalMs = 350L
 
     private val faces = FaceDetection.getClient(
         FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-            .setMinFaceSize(0.10f)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+            .setMinFaceSize(0.06f)          // small enough to notice people down the hall (wakes screen only)
             .build()
     )
     private val labeler = ImageLabeling.getClient(
@@ -55,6 +78,17 @@ class Detector(
     private var streak = 0
     private var petStreak = 0
     @Volatile var lastFaceSeen = 0L; private set
+    @Volatile var metrics: FaceMetrics? = null; private set
+
+    // calibration: watch for a few seconds and remember the largest frontal face
+    @Volatile private var calibrateUntil = 0L
+    @Volatile private var calibrateBest = 0f
+    @Volatile var onCalibrated: ((Float?) -> Unit)? = null
+
+    fun startCalibration(windowMs: Long = 4000) {
+        calibrateBest = 0f
+        calibrateUntil = SystemClock.uptimeMillis() + windowMs
+    }
 
     fun start(owner: LifecycleOwner, front: Boolean) {
         val future = ProcessCameraProvider.getInstance(ctx)
@@ -82,9 +116,23 @@ class Detector(
         }, ContextCompat.getMainExecutor(ctx))
     }
 
+    private fun measure(f: Face, frameW: Int): FaceMetrics {
+        val frac = f.boundingBox.width().toFloat() / frameW
+        val yaw = f.headEulerAngleY
+        val pitch = f.headEulerAngleX
+        val eyesFound = f.getLandmark(FaceLandmark.LEFT_EYE) != null && f.getLandmark(FaceLandmark.RIGHT_EYE) != null
+        val lOpen = f.leftEyeOpenProbability
+        val rOpen = f.rightEyeOpenProbability
+        // ML Kit only reports eye-open probabilities for near-frontal faces; null = can't see both eyes
+        val bothEyes = eyesFound && lOpen != null && rOpen != null && lOpen > 0.3f && rOpen > 0.3f
+        val maxTurn = prefs.maxYaw.toFloat()
+        val engaged = bothEyes && frac >= prefs.minFaceFrac && abs(yaw) <= maxTurn && abs(pitch) <= maxTurn
+        return FaceMetrics(frac, yaw, pitch, bothEyes, engaged, SystemClock.uptimeMillis())
+    }
+
     private fun analyze(proxy: ImageProxy) {
         val now = SystemClock.uptimeMillis()
-        if (now - lastFrame < 400 || busy.get()) { proxy.close(); return }
+        if (now - lastFrame < intervalMs || busy.get()) { proxy.close(); return }
         lastFrame = now
         val bmp: Bitmap = try {
             val raw = proxy.toBitmap()
@@ -99,13 +147,25 @@ class Detector(
         val image = InputImage.fromBitmap(bmp, 0)
         faces.process(image)
             .addOnSuccessListener { list ->
-                if (list.isNotEmpty()) {
+                val main = list.maxByOrNull { it.boundingBox.width() }
+                val m = main?.let { measure(it, bmp.width) }
+                metrics = m ?: metrics
+                if (main != null) {
                     lastFaceSeen = SystemClock.uptimeMillis()
                     onActivity()
-                    streak++
-                } else streak = 0
+                }
+                streak = if (m?.engaged == true) streak + 1 else 0
 
-                val wantLabels = streak >= 3 || now - lastLabel > 2000
+                // calibration window: remember the closest frontal face
+                if (calibrateUntil > 0) {
+                    if (m != null && m.bothEyes && abs(m.yaw) <= 30f && m.frac > calibrateBest) calibrateBest = m.frac
+                    if (SystemClock.uptimeMillis() > calibrateUntil) {
+                        calibrateUntil = 0
+                        onCalibrated?.invoke(calibrateBest.takeIf { it > 0f })
+                    }
+                }
+
+                val wantLabels = streak >= 3 || now - lastLabel > 2500
                 if (!wantLabels) { busy.set(false); return@addOnSuccessListener }
                 lastLabel = now
                 labeler.process(image)
@@ -117,7 +177,7 @@ class Detector(
                         if (armed && streak >= 3) {
                             armed = false; streak = 0
                             onVisitor(Sighting(list.size, names.take(8), bmp))
-                        } else if (armed && petStreak >= 2) {
+                        } else if (armed && petStreak >= 2 && prefs.greetPets) {
                             armed = false; petStreak = 0
                             onActivity()
                             onVisitor(Sighting(0, names.take(8), bmp, pet))

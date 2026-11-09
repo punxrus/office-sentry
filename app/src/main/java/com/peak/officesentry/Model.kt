@@ -79,6 +79,23 @@ class Prefs(ctx: Context) {
     var cooldownSec: Int
         get() = sp.getInt("cooldown", 45)
         set(v) = sp.edit().putInt("cooldown", v.coerceIn(5, 600)).apply()
+    // ---- visitor engagement + power ----
+    /** Minimum face width as a fraction of the camera frame before Garrick speaks (closer = bigger). */
+    var minFaceFrac: Float
+        get() = sp.getFloat("minFace", 0.16f)
+        set(v) = sp.edit().putFloat("minFace", v.coerceIn(0.04f, 0.8f)).apply()
+    /** Max head turn (degrees, left/right and up/down) to count as "facing the door". */
+    var maxYaw: Int
+        get() = sp.getInt("maxYaw", 25)
+        set(v) = sp.edit().putInt("maxYaw", v.coerceIn(5, 60)).apply()
+    /** Screen sleeps (black, min backlight) after this many seconds with no faces. */
+    var sleepAfterSec: Int
+        get() = sp.getInt("sleepAfter", 60)
+        set(v) = sp.edit().putInt("sleepAfter", v.coerceIn(10, 3600)).apply()
+    var greetPets: Boolean
+        get() = sp.getBoolean("pets", true)
+        set(v) = sp.edit().putBoolean("pets", v).apply()
+
     var dimWhenIdle: Boolean
         get() = sp.getBoolean("dim", true)
         set(v) = sp.edit().putBoolean("dim", v).apply()

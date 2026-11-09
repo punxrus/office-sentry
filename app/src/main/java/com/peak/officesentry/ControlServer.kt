@@ -29,6 +29,8 @@ class ControlServer(
     private val voices: () -> List<Voice.VoiceInfo>,
     private val engines: () -> List<Voice.EngineInfo>,
     private val onEngineChanged: () -> Unit,
+    private val faceJson: () -> String,
+    private val onCalibrate: () -> Unit,
     private val desk: DeskLink,
     /** Extra live JSON fields for /api/state, e.g. "\"mood\":\"IDLE\",\"visitor\":false" */
     private val liveState: () -> String,
@@ -84,6 +86,7 @@ class ControlServer(
         when {
             method == "GET" && path == "/" -> respond(out, 200, "text/html; charset=utf-8", page())
             method == "GET" && path == "/api/state" -> respond(out, 200, "application/json", stateJson())
+            method == "GET" && path == "/api/face" -> respond(out, 200, "application/json", faceJson())
             method == "GET" && path.startsWith("/audio/") && path.endsWith(".wav") -> {
                 val f = desk.audioFile(path.removePrefix("/audio/").removeSuffix(".wav"))
                 if (f == null) respond(out, 404, "text/plain", "gone") else respondFile(out, "audio/wav", f)
@@ -101,6 +104,15 @@ class ControlServer(
             method == "POST" && path == "/api/register" -> {
                 desk.register(form["role"].orEmpty(), form["ip"]?.takeIf { it.isNotBlank() } ?: remoteIp)
                 respond(out, 200, "application/json", "{\"ok\":true}")
+            }
+            method == "POST" && path == "/calibrate" -> { main.post { onCalibrate() }; redirect(out) }
+            method == "POST" && path == "/detect/settings" -> {
+                form["minFace"]?.toFloatOrNull()?.let { prefs.minFaceFrac = it / 100f }
+                form["maxYaw"]?.toIntOrNull()?.let { prefs.maxYaw = it }
+                form["sleepAfter"]?.toIntOrNull()?.let { prefs.sleepAfterSec = it }
+                prefs.dimWhenIdle = form["dim"] == "on"
+                prefs.greetPets = form["pets"] == "on"
+                redirect(out)
             }
             method == "POST" && path == "/desk/test" -> {
                 desk.announce("test", "", "Lord ${prefs.ownerName}, your desk herald stands ready.")
@@ -123,7 +135,6 @@ class ControlServer(
                 form["cooldown"]?.toIntOrNull()?.let { prefs.cooldownSec = it }
                 prefs.sendImage = form["sendImage"] == "on"
                 prefs.listenEnabled = form["listen"] == "on"
-                prefs.dimWhenIdle = form["dim"] == "on"
                 form["newPin"]?.let { if (it.isNotBlank()) prefs.pin = if (it == "-") "" else it }
                 val newEngine = form["ttsEngine"]
                 if (newEngine != null && newEngine != prefs.ttsEngine) {
@@ -235,6 +246,31 @@ $pinField <button class='go'>Say it</button></form>
 <div class='card'><ul>$msgs</ul>
 <form method='post' action='/messages/clear'>$pinField <button class='go' style='background:#8e1f2a'>Clear messages</button></form></div>
 
+<h2>Visitor detection and power</h2>
+<div class='card'>
+<p style='margin-top:0'>Garrick speaks only when someone is <b>close</b>, <b>facing the door</b>, and <b>both eyes</b> are visible, for about a second. People passing in profile or farther down the hall only wake the screen.</p>
+<div id='live' style='background:#15101c;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px'>Live camera: loading...</div>
+<form method='post' action='/calibrate'>$pinField <button class='go' style='background:#7a5a1e'>&#127919; Calibrate distance (Garrick will talk you through it)</button></form>
+<form method='post' action='/detect/settings' style='margin-top:12px'>
+<label>Minimum face size to speak (% of camera width, bigger = must be closer)<input type='number' name='minFace' min='4' max='80' step='1' value='${(prefs.minFaceFrac * 100).toInt()}'></label>
+<label>Max head turn to count as "facing the door" (degrees)<input type='number' name='maxYaw' min='5' max='60' value='${prefs.maxYaw}'></label>
+<label><input type='checkbox' name='dim' ${chk(prefs.dimWhenIdle)}> Sleep the screen when nobody is around (camera keeps watching)</label>
+<label>Sleep after (seconds with no faces)<input type='number' name='sleepAfter' min='10' max='3600' value='${prefs.sleepAfterSec}'></label>
+<label><input type='checkbox' name='pets' ${chk(prefs.greetPets)}> Greet dogs and cats</label>
+$pinField <button class='go'>Save detection settings</button></form>
+</div>
+<script>
+async function tick(){try{const r=await fetch('/api/face');const f=await r.json();const el=document.getElementById('live');
+if(!f.seen){el.innerHTML='Live camera: no face seen yet'+(f.asleep?' (screen asleep)':'');return}
+const ok=(b,t)=>`<span style="color:${'$'}{b?'#5c5':'#f0a040'}">${'$'}{b?'&#10003;':'&#10007;'} ${'$'}{t}</span>`;
+const age=(f.ageMs/1000).toFixed(0);
+el.innerHTML=`Last face ${'$'}{age}s ago${'$'}{f.asleep?' (screen asleep)':''}<br>`+
+ok(f.frac>=f.minFace,`size ${'$'}{(f.frac*100).toFixed(0)}% (need ${'$'}{(f.minFace*100).toFixed(0)}%)`)+' &nbsp; '+
+ok(Math.abs(f.yaw)<=f.maxYaw&&Math.abs(f.pitch)<=f.maxYaw,`facing ${'$'}{Math.round(f.yaw)}&deg;`)+' &nbsp; '+
+ok(f.bothEyes,'both eyes')+'<br>'+(f.engaged?'<b style="color:#5c5">Would speak to this person</b>':'<span class="muted">Would not speak</span>')}catch(e){}}
+setInterval(tick,1000);tick();
+</script>
+
 <h2>Desk herald (ATOM Voice + panel)</h2>
 <div class='card'>
 <p>Speaker: ${devLine("voice")}<br>Panel: ${devLine("panel")}</p>
@@ -262,7 +298,6 @@ $pinField <button class='go'>Save desk settings</button></form>
 <label>Cooldown between visitors (seconds)<input type='number' name='cooldown' min='5' max='600' value='${prefs.cooldownSec}'></label>
 <label><input type='checkbox' name='sendImage' ${chk(prefs.sendImage)}> Send a camera snapshot to Claude (for visual comments)</label>
 <label><input type='checkbox' name='listen' ${chk(prefs.listenEnabled)}> Listen for replies (two-way conversation)</label>
-<label><input type='checkbox' name='dim' ${chk(prefs.dimWhenIdle)}> Dim screen when nobody is around</label>
 <label>Set control-page PIN (enter "-" to remove)<input type='password' name='newPin' placeholder='${if (prefs.pin.isBlank()) "no PIN set" else "PIN is set"}'></label>
 $pinField <button class='go'>Save settings</button></form></div>
 <p class='muted'>Page served by the phone at port $port.</p>
