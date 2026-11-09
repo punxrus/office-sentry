@@ -3,6 +3,7 @@ name: Build APK
 on:
   push:
     branches: [ main ]
+    paths-ignore: [ "firmware/**", ".github/workflows/firmware.yml" ]
   workflow_dispatch:
 
 jobs:

@@ -1,0 +1,57 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "firmware/**", ".github/workflows/firmware.yml" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO + esptool
+        run: pip install platformio esptool
+
+      - name: Build ATOM Voice firmware
+        run: pio run -d firmware/atom-voice
+
+      - name: Build desk panel firmware
+        run: pio run -d firmware/desk-panel
+
+      - name: Merge into single flashable images
+        run: |
+          BOOT0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
+          A=firmware/atom-voice/.pio/build/atom-voice
+          esptool.py --chip esp32 merge_bin -o Garrick-ATOM-Voice.bin \
+            --flash_mode keep --flash_freq keep --flash_size 4MB \
+            0x1000 $A/bootloader.bin 0x8000 $A/partitions.bin 0xe000 "$BOOT0" 0x10000 $A/firmware.bin
+          P=firmware/desk-panel/.pio/build/desk-panel
+          esptool.py --chip esp32s3 merge_bin -o Garrick-Desk-Panel.bin \
+            --flash_mode keep --flash_freq keep --flash_size 8MB \
+            0x0 $P/bootloader.bin 0x8000 $P/partitions.bin 0xe000 "$BOOT0" 0x10000 $P/firmware.bin
+          ls -la Garrick-*.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: garrick-firmware
+          path: Garrick-*.bin
+
+      - name: Attach to rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          files: |
+            Garrick-ATOM-Voice.bin
+            Garrick-Desk-Panel.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
