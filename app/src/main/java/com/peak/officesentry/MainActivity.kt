@@ -67,6 +67,8 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
             onSay = { wake(); sentry.announce(it) },
             onTest = { wake(); sentry.onVisitor(Sighting(1, emptyList(), null)) },
             voices = { voice.voiceList() },
+            engines = { voice.engines },
+            onEngineChanged = { voice.buildTts(); desk.buildTts() },
             desk = desk,
             liveState = {
                 val seen = detector?.lastFaceSeen ?: 0L
@@ -228,7 +230,7 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
 
     private fun showMenu() {
         val items = Status.values().map { "Status: ${it.label}" } +
-            listOf("Set note…", "Messages (${prefs.messages().size})…", "Settings…", "Test visitor conversation",
+            listOf("Set note…", "Messages (${prefs.messages().size})…", "Settings…", "Test visitor conversation", "Voice…",
                 if (isPinned) "Kiosk mode: ON (locked)" else "Turn on kiosk mode (lock to this app)",
                 "Exit to home screen")
         AlertDialog.Builder(this).setTitle("Office Sentry  •  ${ControlServer.localIp() ?: "?"}:$PORT")
@@ -240,11 +242,50 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
                     i == n + 1 -> messagesDialog()
                     i == n + 2 -> settingsDialog()
                     i == n + 3 -> sentry.onVisitor(Sighting(1, emptyList(), null))
-                    i == n + 4 -> if (!isPinned) enterKiosk()
+                    i == n + 4 -> engineDialog()
+                    i == n + 5 -> if (!isPinned) enterKiosk()
                     else -> exitToHome()
                 }
             }.show()
         if (prefs.pin.isBlank()) Toast.makeText(this, "Tip: set a PIN in Settings so only you can open this menu.", Toast.LENGTH_LONG).show()
+    }
+
+    // ---------------- voice: engine, then voice, with spoken preview ----------------
+
+    private fun engineDialog() {
+        val engines = voice.engines
+        val labels = listOf("Phone default") + engines.map { it.label }
+        val cur = engines.indexOfFirst { it.name == prefs.ttsEngine } + 1
+        AlertDialog.Builder(this).setTitle("Speech engine")
+            .setSingleChoiceItems(labels.toTypedArray(), cur) { d, i ->
+                d.dismiss()
+                val pkg = if (i == 0) "" else engines[i - 1].name
+                if (pkg != prefs.ttsEngine) {
+                    prefs.ttsEngine = pkg; prefs.voiceName = ""
+                    voice.buildTts(); desk.buildTts()
+                }
+                lifecycleScope.launch { delay(1500); voicePickDialog() }
+            }
+            .setNegativeButton("Cancel", null).show()
+        if (engines.size <= 1) Toast.makeText(this,
+            "For free AI voices, install VoxSherpa TTS (Play Store) or SherpaTTS (F-Droid) and download a Piper voice.",
+            Toast.LENGTH_LONG).show()
+    }
+
+    private fun voicePickDialog() {
+        val list = voice.voiceList()
+        if (list.isEmpty()) {
+            Toast.makeText(this, "This engine has no voices yet. Open the engine's app and download one.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val labels = listOf("Engine default") + list.map { it.label }
+        val cur = list.indexOfFirst { it.name == prefs.voiceName } + 1
+        AlertDialog.Builder(this).setTitle("Garrick's voice (tap to hear)")
+            .setSingleChoiceItems(labels.toTypedArray(), cur) { _, i ->
+                prefs.voiceName = if (i == 0) "" else list[i - 1].name
+                sentry.announce("Halt. State thy business, traveler.")
+            }
+            .setPositiveButton("Keep this voice", null).show()
     }
 
     private fun noteDialog() {

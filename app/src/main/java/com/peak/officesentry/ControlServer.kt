@@ -27,6 +27,8 @@ class ControlServer(
     private val onSay: (String) -> Unit,
     private val onTest: () -> Unit,
     private val voices: () -> List<Voice.VoiceInfo>,
+    private val engines: () -> List<Voice.EngineInfo>,
+    private val onEngineChanged: () -> Unit,
     private val desk: DeskLink,
     /** Extra live JSON fields for /api/state, e.g. "\"mood\":\"IDLE\",\"visitor\":false" */
     private val liveState: () -> String,
@@ -123,7 +125,12 @@ class ControlServer(
                 prefs.listenEnabled = form["listen"] == "on"
                 prefs.dimWhenIdle = form["dim"] == "on"
                 form["newPin"]?.let { if (it.isNotBlank()) prefs.pin = if (it == "-") "" else it }
-                form["voiceName"]?.let { prefs.voiceName = it }
+                val newEngine = form["ttsEngine"]
+                if (newEngine != null && newEngine != prefs.ttsEngine) {
+                    prefs.ttsEngine = newEngine
+                    prefs.voiceName = ""            // voice names differ per engine
+                    main.post { onEngineChanged() }
+                } else form["voiceName"]?.let { prefs.voiceName = it }
                 form["pitch"]?.toFloatOrNull()?.let { prefs.pitch = it }
                 form["rate"]?.toFloatOrNull()?.let { prefs.rate = it }
                 main.post { onStatusChanged() }
@@ -163,6 +170,14 @@ class ControlServer(
         val ago = (System.currentTimeMillis() - d.seen) / 1000
         val ok = desk.online(role) != null
         return "<span class='${if (ok) "ok" else "warn"}'>${esc(d.ip)} (seen ${ago}s ago)</span>"
+    }
+
+    private fun engineOptions(): String {
+        val cur = prefs.ttsEngine
+        val def = "<option value=''${if (cur.isBlank()) " selected" else ""}>Phone default</option>"
+        return def + engines().joinToString("") { e ->
+            "<option value='${esc(e.name)}'${if (e.name == cur) " selected" else ""}>${esc(e.label)} (${esc(e.name)})</option>"
+        }
     }
 
     private fun voiceOptions(): String {
@@ -238,6 +253,8 @@ $pinField <button class='go'>Save desk settings</button></form>
 <label>Guard name<input type='text' name='guard' value='${esc(prefs.guardName)}'></label>
 <label>Claude API key: $keySet<input type='password' name='apiKey' placeholder='sk-ant-... (leave blank to keep)' autocomplete='off'></label>
 <label>Claude model<input type='text' name='model' value='${esc(prefs.model)}'></label>
+<label>Speech engine<select name='ttsEngine'>${engineOptions()}</select></label>
+<p class='muted' style='margin:0 0 10px'>Want a natural AI voice for free? Install <b>VoxSherpa TTS</b> (Play Store) or <b>SherpaTTS</b> (F-Droid), download a Piper voice in that app, then pick it here and Save. After switching engines, reload this page to see its voices.</p>
 <label>Voice<select name='voiceName'>${voiceOptions()}</select></label>
 <label>Pitch: <output id='po'>${"%.2f".format(prefs.pitch)}</output><input type='range' name='pitch' min='0.5' max='1.6' step='0.05' value='${prefs.pitch}' oninput="po.value=Number(this.value).toFixed(2)"></label>
 <label>Speed: <output id='ro'>${"%.2f".format(prefs.rate)}</output><input type='range' name='rate' min='0.5' max='1.6' step='0.05' value='${prefs.rate}' oninput="ro.value=Number(this.value).toFixed(2)"></label>

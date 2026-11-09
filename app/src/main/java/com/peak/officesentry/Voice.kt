@@ -22,19 +22,29 @@ import java.util.concurrent.ConcurrentHashMap
 class Voice(private val ctx: Context, private val prefs: Prefs) {
     data class VoiceInfo(val name: String, val label: String)
 
-    /** English voices installed in the TTS engine, best quality first. Thread-safe snapshot. */
+    data class EngineInfo(val name: String, val label: String)
+
+    /** Voices offered by the current engine (English first). Thread-safe snapshot. */
     @Volatile var available: List<VoiceInfo> = emptyList(); private set
+    @Volatile var engines: List<EngineInfo> = emptyList(); private set
+    @Volatile var currentEngine: String = ""; private set
 
     private fun loadVoices() {
         available = runCatching {
-            tts.voices.orEmpty()
-                .filter { it.locale.language == "en" && !it.features.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }
+            val all = tts.voices.orEmpty().filter { !it.features.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }
+            val english = all.filter { v ->
+                v.locale.language.startsWith("en") || runCatching { v.locale.isO3Language == "eng" }.getOrDefault(false)
+            }
+            (english.ifEmpty { all })
                 .sortedWith(compareBy({ it.locale.country != "US" }, { -it.quality }, { it.name }))
                 .map { v ->
                     val where = if (v.isNetworkConnectionRequired) "online" else "offline"
-                    VoiceInfo(v.name, "${v.locale.displayCountry} • ${v.name} ($where)")
+                    val country = v.locale.displayCountry.ifBlank { v.locale.displayLanguage }
+                    VoiceInfo(v.name, "$country \u2022 ${v.name} ($where)")
                 }
         }.getOrDefault(emptyList())
+        engines = runCatching { tts.engines.map { EngineInfo(it.name, it.label) } }.getOrDefault(emptyList())
+        currentEngine = runCatching { tts.defaultEngine }.getOrDefault("")
     }
 
     fun voiceList(): List<VoiceInfo> {
@@ -57,14 +67,26 @@ class Voice(private val ctx: Context, private val prefs: Prefs) {
     private lateinit var tts: TextToSpeech
     private var recognizer: SpeechRecognizer? = null
 
-    init {
-        tts = TextToSpeech(ctx) { st ->
+    init { buildTts() }
+
+    /**
+     * (Re)create the TTS client on the engine chosen in [Prefs.ttsEngine]
+     * (blank = the phone's default engine). We deliberately do NOT force a
+     * language, so the voice chosen in Android settings / the engine is kept.
+     */
+    fun buildTts() {
+        ready = false
+        if (::tts.isInitialized) runCatching { tts.stop(); tts.shutdown() }
+        val engine = prefs.ttsEngine.ifBlank { null }
+        tts = TextToSpeech(ctx, { st ->
             if (st == TextToSpeech.SUCCESS) {
-                tts.language = Locale.US
+                // Only fall back to US English if the engine has no usable default voice.
+                if (runCatching { tts.voice }.getOrNull() == null) runCatching { tts.language = Locale.US }
                 loadVoices()
+                if (engine != null) currentEngine = engine
                 ready = true
             }
-        }
+        }, engine)
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {}
             override fun onDone(id: String?) { id?.let { pending.remove(it)?.complete(Unit) } }

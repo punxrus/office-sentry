@@ -61,9 +61,19 @@ class DeskLink(
     private lateinit var tts: TextToSpeech
 
     init {
-        tts = TextToSpeech(ctx) { st ->
-            if (st == TextToSpeech.SUCCESS) { tts.language = Locale.US; ttsReady = true }
-        }
+        buildTts()
+    }
+
+    /** Same engine as the door voice so Garrick sounds identical at the desk. */
+    fun buildTts() {
+        ttsReady = false
+        if (::tts.isInitialized) runCatching { tts.shutdown() }
+        tts = TextToSpeech(ctx, { st ->
+            if (st == TextToSpeech.SUCCESS) {
+                if (runCatching { tts.voice }.getOrNull() == null) runCatching { tts.language = Locale.US }
+                ttsReady = true
+            }
+        }, prefs.ttsEngine.ifBlank { null })
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) {}
             override fun onDone(id: String?) { id?.let { pending.remove(it)?.complete(true) } }

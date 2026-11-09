@@ -82,16 +82,20 @@ class Prefs(ctx: Context) {
     var dimWhenIdle: Boolean
         get() = sp.getBoolean("dim", true)
         set(v) = sp.edit().putBoolean("dim", v).apply()
+    /** TTS engine package (e.g. org.woheller69.ttsengine). Blank = phone default. */
+    var ttsEngine: String
+        get() = sp.getString("ttsEngine", "") ?: ""
+        set(v) = sp.edit().putString("ttsEngine", v.trim()).apply()
     /** Android TTS voice name, e.g. "en-us-x-iom-local". Blank = engine default. */
     var voiceName: String
         get() = sp.getString("voiceName", "") ?: ""
         set(v) = sp.edit().putString("voiceName", v.trim()).apply()
-    /** Stout-veteran defaults: lower and a touch slower. */
+    /** Natural pitch by default (neural voices sound processed when pitch-shifted); pick a deep voice instead. */
     var pitch: Float
-        get() = sp.getFloat("pitch", 0.8f)
+        get() = sp.getFloat("pitch", 1.0f)
         set(v) = sp.edit().putFloat("pitch", v.coerceIn(0.5f, 1.6f)).apply()
     var rate: Float
-        get() = sp.getFloat("rate", 0.9f)
+        get() = sp.getFloat("rate", 0.95f)
         set(v) = sp.edit().putFloat("rate", v.coerceIn(0.5f, 1.6f)).apply()
     // ---- desk (ATOM Voice speaker + Touch-LCD-7 panel) ----
     var deskEnabled: Boolean
