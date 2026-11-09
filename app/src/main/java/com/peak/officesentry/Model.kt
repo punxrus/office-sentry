@@ -93,6 +93,9 @@ class Prefs(ctx: Context) {
     var rate: Float
         get() = sp.getFloat("rate", 0.9f)
         set(v) = sp.edit().putFloat("rate", v.coerceIn(0.5f, 1.6f)).apply()
+    var kiosk: Boolean
+        get() = sp.getBoolean("kiosk", false)
+        set(v) = sp.edit().putBoolean("kiosk", v).apply()
     var pin: String
         get() = sp.getString("pin", "") ?: ""
         set(v) = sp.edit().putString("pin", v.trim()).apply()

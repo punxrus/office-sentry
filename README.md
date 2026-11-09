@@ -9,7 +9,7 @@ An Android kiosk app for an old phone mounted outside a home office door. A griz
 - **Takes messages:** messages visitors leave appear on the phone and on the control page.
 - **Wi-Fi control page:** open `http://<phone-ip>:8080` from any PC on your network to change status, make the guard speak, read messages, and change settings. The address appears in the bottom-right corner of the screen.
 - **Voice:** pick any installed Google voice on the control page and tune pitch and speed; *Save & preview* plays a test line. The default is a stout veteran (low pitch, slightly slow).
-- **Owner menu:** hold a finger on the screen for 3 seconds.
+- **Owner menu (secret):** tap the corners in order (top-left, top-right, bottom-right, bottom-left) within 5 seconds. It offers kiosk mode (locks the phone to the app) and **Exit to home screen**. Set a PIN!
 - **Idle behavior:** after 2 minutes with no one around, the guard falls asleep and the screen dims. He wakes when someone appears.
 
 ## Install

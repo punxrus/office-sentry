@@ -1,6 +1,8 @@
 package com.peak.officesentry
 
 import android.Manifest
+import android.app.ActivityManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -137,17 +139,62 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
         window.attributes = window.attributes.apply { screenBrightness = v }
     }
 
-    // ---------------- owner menu: hold the screen for 3 seconds ----------------
+    // ---------------- owner menu: secret corner pattern ----------------
+    // Tap the corners in order: top-left, top-right, bottom-right, bottom-left, within 5 seconds.
+
+    private val secret = intArrayOf(0, 1, 2, 3)   // 0=TL 1=TR 2=BR 3=BL
+    private var secretStep = 0
+    private var secretStart = 0L
+
+    private fun cornerOf(x: Float, y: Float): Int {
+        val zx = view.width * 0.22f; val zy = view.height * 0.15f
+        val left = x < zx; val right = x > view.width - zx
+        val top = y < zy; val bottom = y > view.height - zy
+        return when {
+            top && left -> 0; top && right -> 1; bottom && right -> 2; bottom && left -> 3; else -> -1
+        }
+    }
 
     private fun setupOwnerGesture() {
-        val opener = Runnable { ownerMenu() }
         view.setOnTouchListener { v, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> { wake(); v.postDelayed(opener, 3000) }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { v.removeCallbacks(opener); v.performClick() }
-            }
+            if (e.action == MotionEvent.ACTION_DOWN) {
+                wake()
+                val now = SystemClock.uptimeMillis()
+                if (secretStep > 0 && now - secretStart > 5000) secretStep = 0
+                val corner = cornerOf(e.x, e.y)
+                when {
+                    corner == secret[secretStep] -> {
+                        if (secretStep == 0) secretStart = now
+                        secretStep++
+                        if (secretStep == secret.size) { secretStep = 0; ownerMenu() }
+                    }
+                    corner == secret[0] -> { secretStep = 1; secretStart = now }
+                    else -> secretStep = 0
+                }
+            } else if (e.action == MotionEvent.ACTION_UP) v.performClick()
             true
         }
+    }
+
+    // ---------------- kiosk (app pinning) ----------------
+
+    private val isPinned: Boolean
+        get() = (getSystemService(ACTIVITY_SERVICE) as ActivityManager).lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE
+
+    private fun enterKiosk() {
+        prefs.kiosk = true
+        if (!isPinned) runCatching { startLockTask() }
+    }
+
+    private fun exitToHome() {
+        prefs.kiosk = false
+        if (isPinned) runCatching { stopLockTask() }
+        startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (prefs.kiosk && !isPinned) runCatching { startLockTask() }
     }
 
     private fun ownerMenu() {
@@ -161,7 +208,9 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
 
     private fun showMenu() {
         val items = Status.values().map { "Status: ${it.label}" } +
-            listOf("Set note…", "Messages (${prefs.messages().size})…", "Settings…", "Test visitor conversation")
+            listOf("Set note…", "Messages (${prefs.messages().size})…", "Settings…", "Test visitor conversation",
+                if (isPinned) "Kiosk mode: ON (locked)" else "Turn on kiosk mode (lock to this app)",
+                "Exit to home screen")
         AlertDialog.Builder(this).setTitle("Office Sentry  •  ${ControlServer.localIp() ?: "?"}:$PORT")
             .setItems(items.toTypedArray()) { _, i ->
                 val n = Status.values().size
@@ -170,9 +219,12 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
                     i == n -> noteDialog()
                     i == n + 1 -> messagesDialog()
                     i == n + 2 -> settingsDialog()
-                    else -> sentry.onVisitor(Sighting(1, emptyList(), null))
+                    i == n + 3 -> sentry.onVisitor(Sighting(1, emptyList(), null))
+                    i == n + 4 -> if (!isPinned) enterKiosk()
+                    else -> exitToHome()
                 }
             }.show()
+        if (prefs.pin.isBlank()) Toast.makeText(this, "Tip: set a PIN in Settings so only you can open this menu.", Toast.LENGTH_LONG).show()
     }
 
     private fun noteDialog() {
