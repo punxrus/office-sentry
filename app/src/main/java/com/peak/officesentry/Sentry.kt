@@ -70,11 +70,11 @@ class Sentry(
     private fun fallbackLine(): String {
         val st = prefs.status; val owner = prefs.ownerName
         return when (st) {
-            Status.OPEN -> "Hail, friend! $owner is in. Knock and enter."
-            Status.KNOCK -> "Greetings! Please knock and wait for $owner to answer."
-            Status.MEETING -> "Halt, friend! $owner is in a meeting. Please return later."
-            Status.DND -> "Halt! $owner must not be disturbed right now, unless it is an emergency."
-            Status.AWAY -> "Greetings! $owner is away from the office at the moment."
+            Status.OPEN -> "Hail, traveler. $owner is in. Knock and enter."
+            Status.KNOCK -> "Aye. Knock, and wait for $owner to answer. Patience wins battles."
+            Status.MEETING -> "Halt. $owner is in a meeting. Quiet now, and come back later."
+            Status.DND -> "Halt. $owner is not to be disturbed. Unless something is on fire."
+            Status.AWAY -> "$owner has left his post. I have not. Come back later, traveler."
         } + if (prefs.note.isNotBlank()) " ${prefs.note}." else ""
     }
 
@@ -82,16 +82,17 @@ class Sentry(
         val owner = prefs.ownerName
         val time = SimpleDateFormat("EEEE h:mm a", Locale.US).format(Date())
         return """
-You are ${prefs.guardName}, a small, cheerful pixel-art castle guard in steel helmet and blue tabard, posted outside $owner's home office door. You are shown on an old phone screen and your words are spoken aloud through a speaker.
+You are ${prefs.guardName}, a grizzled old veteran guard: dented nasal helm, chainmail coif, grey walrus mustache, and a scar through one brow from a battle you love to half-mention. Thirty winters of service. You stand watch outside $owner's home office door, shown as a pixel portrait on an old phone, and your words are spoken aloud through a speaker.
+Personality: gruff, dry-humored, unflappable, fiercely loyal, and soft-hearted underneath, especially with children and animals.
 
 CURRENT STATUS: ${prefs.status.label}. ${prefs.status.aiLine(owner)}
 ${if (prefs.note.isNotBlank()) "Owner's note: \"${prefs.note}\"" else ""}
 Local time: $time.
 
 How to behave:
-- Speak in one to three SHORT sentences. Plain spoken English with a light, playful medieval flavor ("Hail!", "traveler", "milord"). Never use markdown, emoji, lists, or stage directions.
+- Speak in one to three SHORT sentences. Plain spoken English with a weathered old-soldier flavor ("Halt.", "Hail, traveler.", "Aye.", "in my day..."). Never use markdown, emoji, lists, or stage directions.
 - Your job is to tell visitors whether they may knock or come in, based on the status. You cannot open the door yourself.
-- Visitors are most likely family (a spouse, kids, pets) or guests. Be warm and kind, never scary. Keep it family-friendly.
+- Visitors are most likely family (a spouse, kids, pets) or guests. Gruff is fine; mean or scary is not. Keep it family-friendly.
 - If the status blocks entry, politely hold them off and offer to take a message for $owner.
 - EMERGENCIES ALWAYS WIN: if someone mentions an emergency, injury, fire, or anything urgent, tell them to knock loudly and go in right away.
 - If they want to leave a message, confirm it back briefly, then put it on its own final line exactly like:
@@ -154,7 +155,7 @@ MESSAGE: <the message, written in third person, e.g. "Sarah says dinner is ready
             if (heard == null) {
                 misses++
                 if (misses >= 2 || turns >= 2) {
-                    val bye = "Very well. Fare thee well, traveler!"
+                    val bye = "Hmph. Silent type. Fair enough, traveler."
                     ui.setMood(GuardMood.SPEAKING); ui.setBubble(bye); voice.speak(bye)
                     return
                 }
@@ -172,7 +173,7 @@ MESSAGE: <the message, written in third person, e.g. "Sarah says dinner is ready
         ui.setMood(GuardMood.ALERT)
         val key = prefs.apiKey
         val line = if (key.isBlank()) {
-            "Halt, noble ${s.pet!!.lowercase()}! Thou art a very good guardian too."
+            "Ah, a fellow sentry. Good ${s.pet!!.lowercase()}. Carry on."
         } else {
             ui.setMood(GuardMood.THINKING)
             val content = JSONArray()

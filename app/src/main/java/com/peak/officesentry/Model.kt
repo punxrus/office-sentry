@@ -16,27 +16,27 @@ enum class Status(
     OPEN(
         "COME IN", Color.rgb(46, 160, 67), false,
         "OWNER is available. Visitors are welcome to knock and come in.",
-        "OWNER is in. Knock and enter!"
+        "OWNER is in. Knock and enter."
     ),
     KNOCK(
         "KNOCK FIRST", Color.rgb(226, 160, 30), false,
         "OWNER is working. Visitors should knock and wait to be invited in.",
-        "Knock and await an answer, traveler."
+        "Knock, and await an answer."
     ),
     MEETING(
         "IN A MEETING", Color.rgb(205, 50, 50), true,
         "OWNER is in a meeting and may be on camera or microphone. Nobody should open the door or make noise. Offer to take a message.",
-        "Hush! OWNER is in a meeting."
+        "Halt. OWNER is in a meeting."
     ),
     DND(
         "DO NOT DISTURB", Color.rgb(130, 70, 190), true,
         "OWNER is focusing and does not want to be disturbed except for real emergencies. Offer to take a message.",
-        "OWNER must not be disturbed."
+        "None shall disturb OWNER."
     ),
     AWAY(
         "AWAY", Color.rgb(110, 110, 125), false,
         "OWNER is not in the office right now. Offer to take a message.",
-        "OWNER is away. Leave a message?"
+        "OWNER is away. I keep watch."
     );
 
     fun line(owner: String) = idleLine.replace("OWNER", owner)
@@ -59,8 +59,8 @@ class Prefs(ctx: Context) {
         get() = sp.getString("owner", "James") ?: "James"
         set(v) = sp.edit().putString("owner", v.trim().ifEmpty { "James" }).apply()
     var guardName: String
-        get() = sp.getString("guard", "Sir Bitsworth") ?: "Sir Bitsworth"
-        set(v) = sp.edit().putString("guard", v.trim().ifEmpty { "Sir Bitsworth" }).apply()
+        get() = sp.getString("guard", "Old Garrick") ?: "Old Garrick"
+        set(v) = sp.edit().putString("guard", v.trim().ifEmpty { "Old Garrick" }).apply()
     var status: Status
         get() = runCatching { Status.valueOf(sp.getString("status", "OPEN")!!) }.getOrDefault(Status.OPEN)
         set(v) = sp.edit().putString("status", v.name).apply()
@@ -82,6 +82,17 @@ class Prefs(ctx: Context) {
     var dimWhenIdle: Boolean
         get() = sp.getBoolean("dim", true)
         set(v) = sp.edit().putBoolean("dim", v).apply()
+    /** Android TTS voice name, e.g. "en-us-x-iom-local". Blank = engine default. */
+    var voiceName: String
+        get() = sp.getString("voiceName", "") ?: ""
+        set(v) = sp.edit().putString("voiceName", v.trim()).apply()
+    /** Stout-veteran defaults: lower and a touch slower. */
+    var pitch: Float
+        get() = sp.getFloat("pitch", 0.8f)
+        set(v) = sp.edit().putFloat("pitch", v.coerceIn(0.5f, 1.6f)).apply()
+    var rate: Float
+        get() = sp.getFloat("rate", 0.9f)
+        set(v) = sp.edit().putFloat("rate", v.coerceIn(0.5f, 1.6f)).apply()
     var pin: String
         get() = sp.getString("pin", "") ?: ""
         set(v) = sp.edit().putString("pin", v.trim()).apply()

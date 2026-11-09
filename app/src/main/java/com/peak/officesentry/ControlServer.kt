@@ -26,6 +26,7 @@ class ControlServer(
     private val onStatusChanged: () -> Unit,
     private val onSay: (String) -> Unit,
     private val onTest: () -> Unit,
+    private val voices: () -> List<Voice.VoiceInfo>,
 ) {
     private var server: ServerSocket? = null
     private val main = Handler(Looper.getMainLooper())
@@ -99,7 +100,12 @@ class ControlServer(
                 prefs.listenEnabled = form["listen"] == "on"
                 prefs.dimWhenIdle = form["dim"] == "on"
                 form["newPin"]?.let { if (it.isNotBlank()) prefs.pin = if (it == "-") "" else it }
-                main.post { onStatusChanged() }; redirect(out)
+                form["voiceName"]?.let { prefs.voiceName = it }
+                form["pitch"]?.toFloatOrNull()?.let { prefs.pitch = it }
+                form["rate"]?.toFloatOrNull()?.let { prefs.rate = it }
+                main.post { onStatusChanged() }
+                if (form["action"] == "preview") main.post { onSay("Halt! State thy business, traveler. I have guarded this door for thirty winters, and I'll guard it thirty more.") }
+                redirect(out)
             }
             else -> respond(out, 404, "text/plain", "Not found")
         }
@@ -121,6 +127,15 @@ class ControlServer(
     }
 
     private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+    private fun voiceOptions(): String {
+        val cur = prefs.voiceName
+        val list = voices()
+        val def = "<option value=''${if (cur.isBlank()) " selected" else ""}>Phone default</option>"
+        return def + list.joinToString("") { v ->
+            "<option value='${esc(v.name)}'${if (v.name == cur) " selected" else ""}>${esc(v.label)}</option>"
+        }
+    }
 
     private fun stateJson(): String {
         val msgs = prefs.messages().joinToString(",") { "{\"t\":${it.time},\"m\":\"${it.text.replace("\\", "\\\\").replace("\"", "\\\"")}\"}" }
@@ -147,9 +162,9 @@ h1{font-size:22px;margin:4px 0 12px}h2{font-size:15px;color:#b9a8d8;margin:22px 
 .card{background:#2a2238;border:2px solid #3d3352;border-radius:10px;padding:14px}
 .st{border:0;color:#fff;font:bold 15px monospace;padding:14px;border-radius:8px;margin:4px;width:calc(50% - 10px);cursor:pointer;opacity:.55}
 .st.sel{opacity:1;outline:3px solid #fff}
-input[type=text],input[type=password],input[type=number]{width:100%;box-sizing:border-box;padding:10px;background:#15101c;color:#eee;border:1px solid #4a3f60;border-radius:6px;font:14px monospace;margin:4px 0 10px}
+input[type=text],input[type=password],input[type=number],select{width:100%;box-sizing:border-box;padding:10px;background:#15101c;color:#eee;border:1px solid #4a3f60;border-radius:6px;font:14px monospace;margin:4px 0 10px}
 .pin{width:120px!important}button.go{background:#2f5fb3;color:#fff;border:0;padding:10px 16px;border-radius:6px;font:bold 14px monospace;cursor:pointer}
-label{display:block;margin:6px 0}.muted{color:#888}.warn{color:#f0a040}.ok{color:#5c5}ul{padding-left:18px}li{margin:6px 0}
+label{display:block;margin:6px 0}input[type=range]{width:100%;margin:4px 0 10px}.muted{color:#888}.warn{color:#f0a040}.ok{color:#5c5}ul{padding-left:18px}li{margin:6px 0}
 </style></head><body>
 <h1>&#9876; ${esc(prefs.guardName)} &mdash; Office Sentry</h1>
 <div class='card'><form method='post' action='/status'>
@@ -173,6 +188,10 @@ $pinField <button class='go'>Say it</button></form>
 <label>Guard name<input type='text' name='guard' value='${esc(prefs.guardName)}'></label>
 <label>Claude API key: $keySet<input type='password' name='apiKey' placeholder='sk-ant-... (leave blank to keep)' autocomplete='off'></label>
 <label>Claude model<input type='text' name='model' value='${esc(prefs.model)}'></label>
+<label>Voice<select name='voiceName'>${voiceOptions()}</select></label>
+<label>Pitch: <output id='po'>${"%.2f".format(prefs.pitch)}</output><input type='range' name='pitch' min='0.5' max='1.6' step='0.05' value='${prefs.pitch}' oninput="po.value=Number(this.value).toFixed(2)"></label>
+<label>Speed: <output id='ro'>${"%.2f".format(prefs.rate)}</output><input type='range' name='rate' min='0.5' max='1.6' step='0.05' value='${prefs.rate}' oninput="ro.value=Number(this.value).toFixed(2)"></label>
+<button class='go' name='action' value='preview' style='background:#7a5a1e;margin-bottom:12px'>&#128264; Save &amp; preview voice</button>
 <label>Cooldown between visitors (seconds)<input type='number' name='cooldown' min='5' max='600' value='${prefs.cooldownSec}'></label>
 <label><input type='checkbox' name='sendImage' ${chk(prefs.sendImage)}> Send a camera snapshot to Claude (for visual comments)</label>
 <label><input type='checkbox' name='listen' ${chk(prefs.listenEnabled)}> Listen for replies (two-way conversation)</label>

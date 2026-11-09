@@ -1,6 +1,6 @@
 # Office Sentry ⚔️
 
-An Android kiosk app for an old phone mounted outside a home office door. A cute pixel-art castle guard (**Sir Bitsworth**) shows your status, spots visitors with on-device AI, and talks with them using Claude.
+An Android kiosk app for an old phone mounted outside a home office door. A grizzled pixel-art veteran guard (**Old Garrick**), shown as a framed portrait, displays your status, spots visitors with on-device AI, and talks with them using Claude.
 
 ## What it does
 - **Shows your status:** COME IN / KNOCK FIRST / IN A MEETING / DO NOT DISTURB / AWAY, plus an optional note ("Back at 2:30").
@@ -8,6 +8,7 @@ An Android kiosk app for an old phone mounted outside a home office door. A cute
 - **Holds a conversation:** Claude greets the visitor, enforces your status, takes messages, and lets real emergencies through. Speech uses the phone's mic (Android speech recognition) and plays through the phone speaker or any paired Bluetooth speaker.
 - **Takes messages:** messages visitors leave appear on the phone and on the control page.
 - **Wi-Fi control page:** open `http://<phone-ip>:8080` from any PC on your network to change status, make the guard speak, read messages, and change settings. The address appears in the bottom-right corner of the screen.
+- **Voice:** pick any installed Google voice on the control page and tune pitch and speed; *Save & preview* plays a test line. The default is a stout veteran (low pitch, slightly slow).
 - **Owner menu:** hold a finger on the screen for 3 seconds.
 - **Idle behavior:** after 2 minutes with no one around, the guard falls asleep and the screen dims. He wakes when someone appears.
 

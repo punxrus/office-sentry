@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.SystemClock
@@ -17,12 +18,11 @@ import kotlin.math.min
 import kotlin.random.Random
 
 /**
- * Draws the whole kiosk: status banner, pixel-art scene with the guard, speech bubble.
- * The scene is a 48x52 "virtual pixel" grid scaled up with crisp rectangles.
+ * Kiosk screen: status banner, framed pixel portrait of the veteran guard, speech bubble.
+ * The scene is a 64x60 "virtual pixel" grid; the portrait itself is 48x48.
  */
 class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = null) : View(ctx, attrs) {
 
-    // ---- state pushed in from the activity ----
     var status: Status = Status.OPEN; set(v) { field = v; invalidate() }
     var note: String = ""; set(v) { field = v; invalidate() }
     var mood: GuardMood = GuardMood.IDLE; set(v) { field = v; invalidate() }
@@ -33,18 +33,20 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
     private val px = Paint().apply { isAntiAlias = false }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
         color = Color.WHITE
     }
 
+    // working copy of the portrait, rebuilt each frame from BASE + expression overlays
+    private val face = Array(N) { CharArray(N) }
+
     private var nextBlink = SystemClock.uptimeMillis() + 2500
     private var blinkUntil = 0L
+    private var look = 0
+    private var nextLook = SystemClock.uptimeMillis() + 4000
 
     private val ticker = object : Runnable {
-        override fun run() {
-            invalidate()
-            postDelayed(this, 110)
-        }
+        override fun run() { invalidate(); postDelayed(this, 110) }
     }
 
     override fun onAttachedToWindow() { super.onAttachedToWindow(); post(ticker) }
@@ -53,14 +55,15 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
     override fun onDraw(c: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
         val now = SystemClock.uptimeMillis()
-        c.drawColor(Color.rgb(20, 16, 28))
+        c.drawColor(Color.rgb(18, 14, 22))
 
         // ---------- banner ----------
-        val bannerH = h * 0.16f
+        val bannerH = h * 0.15f
         fill.color = status.color
-        c.drawRoundRect(RectF(w * 0.04f, h * 0.02f, w * 0.96f, bannerH), 18f, 18f, fill)
-        fill.color = Color.argb(70, 0, 0, 0)
-        c.drawRect(w * 0.04f, bannerH - 10f, w * 0.96f, bannerH, fill)
+        c.drawRoundRect(RectF(w * 0.04f, h * 0.02f, w * 0.96f, bannerH), 14f, 14f, fill)
+        fill.style = Paint.Style.STROKE; fill.strokeWidth = 5f; fill.color = GOLD
+        c.drawRoundRect(RectF(w * 0.04f, h * 0.02f, w * 0.96f, bannerH), 14f, 14f, fill)
+        fill.style = Paint.Style.FILL
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.textSize = fitText(status.label, w * 0.86f, bannerH * 0.42f)
         val labelY = if (note.isBlank()) h * 0.02f + bannerH * 0.55f else h * 0.02f + bannerH * 0.42f
@@ -76,36 +79,34 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
         val p = max(1f, min(w / VW, sceneMaxH / VH).toInt().toFloat())
         val ox = (w - VW * p) / 2f
         val oy = sceneTop + (sceneMaxH - VH * p) / 2f
-        drawBackground(c, ox, oy, p, now)
-        drawGuard(c, ox, oy, p, now)
+        drawWall(c, ox, oy, p, now)
+        drawPortrait(c, ox, oy, p, now)
 
-        // ---------- speech bubble ----------
-        val bTop = sceneTop + sceneMaxH + h * 0.01f
+        // ---------- speech bubble (parchment) ----------
+        val bTop = sceneTop + sceneMaxH + h * 0.015f
         val bRect = RectF(w * 0.04f, bTop, w * 0.96f, h * 0.95f)
-        fill.color = Color.rgb(250, 246, 232)
-        c.drawRoundRect(bRect, 22f, 22f, fill)
-        fill.color = Color.rgb(26, 20, 32)
-        fill.style = Paint.Style.STROKE; fill.strokeWidth = 6f
-        c.drawRoundRect(bRect, 22f, 22f, fill)
+        fill.color = Color.rgb(238, 224, 190)
+        c.drawRoundRect(bRect, 16f, 16f, fill)
+        fill.style = Paint.Style.STROKE; fill.strokeWidth = 6f; fill.color = Color.rgb(92, 62, 34)
+        c.drawRoundRect(bRect, 16f, 16f, fill)
         fill.style = Paint.Style.FILL
-        // tail pointing up at the guard
-        val tail = android.graphics.Path().apply {
-            moveTo(w / 2 - 24, bTop + 3); lineTo(w / 2, bTop - 26); lineTo(w / 2 + 24, bTop + 3); close()
+        val tail = Path().apply {
+            moveTo(w / 2 - 24, bTop + 3); lineTo(w / 2, bTop - 24); lineTo(w / 2 + 24, bTop + 3); close()
         }
-        fill.color = Color.rgb(250, 246, 232); c.drawPath(tail, fill)
+        fill.color = Color.rgb(238, 224, 190); c.drawPath(tail, fill)
 
         val text = when (mood) {
-            GuardMood.LISTENING -> if (bubbleText.isBlank()) "I'm listening..." else bubbleText
-            GuardMood.THINKING -> "Hmm" + ".".repeat(((now / 300) % 4).toInt())
+            GuardMood.LISTENING -> if (bubbleText.isBlank()) "Speak up, then..." else bubbleText
+            GuardMood.THINKING -> "Hrmm" + ".".repeat(((now / 300) % 4).toInt())
             else -> bubbleText
         }
         val tp = TextPaint(textPaint).apply {
-            color = Color.rgb(26, 20, 32); textAlign = Paint.Align.LEFT
-            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            color = Color.rgb(48, 30, 18); textAlign = Paint.Align.LEFT
+            typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
         }
         val innerW = (bRect.width() - 56).toInt()
         val innerH = bRect.height() - 40
-        var size = h * 0.034f
+        var size = h * 0.036f
         var layout: StaticLayout
         do {
             tp.textSize = size
@@ -119,16 +120,15 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
         c.restore()
 
         if (mood == GuardMood.LISTENING) {
-            // pulsing mic dot
             val r = 10f + 5f * ((now / 120) % 4)
-            fill.color = Color.rgb(205, 50, 50)
+            fill.color = Color.rgb(190, 40, 40)
             c.drawCircle(bRect.right - 34, bRect.top + 34, r, fill)
         }
 
-        // ---------- footer: messages badge + hint ----------
+        // ---------- footer ----------
         textPaint.textAlign = Paint.Align.LEFT
         textPaint.textSize = h * 0.018f
-        textPaint.color = Color.rgb(170, 160, 190)
+        textPaint.color = Color.rgb(170, 160, 150)
         if (messageCount > 0) c.drawText("✉ $messageCount message(s)", w * 0.05f, h * 0.985f, textPaint)
         textPaint.textAlign = Paint.Align.RIGHT
         c.drawText(footer, w * 0.95f, h * 0.985f, textPaint)
@@ -142,199 +142,253 @@ class GuardView @JvmOverloads constructor(ctx: Context, attrs: AttributeSet? = n
         return s
     }
 
-    private fun pix(c: Canvas, ox: Float, oy: Float, p: Float, x: Int, y: Int, color: Int) {
-        px.color = color
-        c.drawRect(ox + x * p, oy + y * p, ox + (x + 1) * p, oy + (y + 1) * p, px)
-    }
-
     private fun rect(c: Canvas, ox: Float, oy: Float, p: Float, x: Int, y: Int, w: Int, h: Int, color: Int) {
         px.color = color
         c.drawRect(ox + x * p, oy + y * p, ox + (x + w) * p, oy + (y + h) * p, px)
     }
 
-    private fun drawBackground(c: Canvas, ox: Float, oy: Float, p: Float, now: Long) {
-        // stone wall
-        rect(c, ox, oy, p, 0, 0, VW.toInt(), 50, Color.rgb(58, 52, 70))
-        val mortar = Color.rgb(40, 34, 50)
-        val hi = Color.rgb(74, 66, 88)
-        for (row in 0 until 13) {
+    // ---------------- background: torch-lit stone wall ----------------
+
+    private fun drawWall(c: Canvas, ox: Float, oy: Float, p: Float, now: Long) {
+        val vw = VW.toInt(); val vh = VH.toInt()
+        rect(c, ox, oy, p, 0, 0, vw, vh, Color.rgb(52, 46, 60))
+        val mortar = Color.rgb(34, 29, 40); val hi = Color.rgb(68, 60, 76)
+        for (row in 0 until vh / 4 + 1) {
             val y = row * 4
-            rect(c, ox, oy, p, 0, y + 3, VW.toInt(), 1, mortar)
-            val shift = if (row % 2 == 0) 0 else 4
-            var x = -shift
-            while (x < VW) {
+            rect(c, ox, oy, p, 0, y + 3, vw, 1, mortar)
+            var x = if (row % 2 == 0) 0 else -4
+            while (x < vw) {
                 if (x >= 0) rect(c, ox, oy, p, x, y, 1, 3, mortar)
-                if (x + 1 in 0 until VW.toInt()) rect(c, ox, oy, p, x + 1, y, 6, 1, hi)
+                if (x + 1 >= 0) rect(c, ox, oy, p, x + 1, y, 6, 1, hi)
                 x += 8
             }
         }
-        // door with arch
-        val doorC = Color.rgb(96, 58, 32); val doorD = Color.rgb(66, 38, 20); val iron = Color.rgb(30, 26, 34)
-        for (y in 6 until 50) {
-            val inset = when (y) { 6 -> 6; 7 -> 4; 8 -> 2; 9 -> 1; else -> 0 }
-            rect(c, ox, oy, p, 13 + inset, y, 22 - inset * 2, 1, doorC)
-        }
-        for (x in listOf(17, 21, 25, 29)) rect(c, ox, oy, p, x, 9, 1, 41, doorD)
-        rect(c, ox, oy, p, 13, 18, 22, 2, iron); rect(c, ox, oy, p, 13, 38, 22, 2, iron)
-        // torches with flicker
+        // torches either side of the portrait
         val flick = ((now / 140) % 3).toInt()
-        for (tx in listOf(5, 42)) {
-            rect(c, ox, oy, p, tx, 20, 1, 6, Color.rgb(80, 50, 30))
-            rect(c, ox, oy, p, tx - 1, 19, 3, 1, Color.rgb(50, 44, 56))
+        for (tx in intArrayOf(3, 60)) {
+            rect(c, ox, oy, p, tx, 24, 1, 7, Color.rgb(80, 50, 30))
+            rect(c, ox, oy, p, tx - 1, 23, 3, 1, Color.rgb(40, 36, 44))
             val fh = 3 + flick % 2
-            rect(c, ox, oy, p, tx - 1, 19 - fh, 3, fh, Color.rgb(240, 120, 30))
-            rect(c, ox, oy, p, tx, 18 - fh + (flick == 2).compareTo(false), 1, fh, Color.rgb(255, 220, 90))
+            rect(c, ox, oy, p, tx - 1, 23 - fh, 3, fh, Color.rgb(240, 120, 30))
+            rect(c, ox, oy, p, tx, 22 - fh + if (flick == 2) 1 else 0, 1, fh, Color.rgb(255, 220, 90))
         }
-        // floor
-        rect(c, ox, oy, p, 0, 50, VW.toInt(), 2, Color.rgb(36, 30, 44))
-        rect(c, ox, oy, p, 0, 50, VW.toInt(), 1, Color.rgb(84, 74, 96))
     }
 
-    private fun drawGuard(c: Canvas, ox: Float, oy: Float, p: Float, now: Long) {
-        val sleeping = mood == GuardMood.SLEEPING
-        val bob = if (sleeping) ((now / 900) % 2).toInt() else if (mood == GuardMood.ALERT) 0 else ((now / 600) % 2).toInt()
-        val gx = 8  // guard sprite origin x in scene
-        val gy = 15 + bob
+    // ---------------- framed portrait ----------------
 
-        for ((y, row) in BODY.withIndex()) for ((x, ch) in row.withIndex()) {
-            val col = PAL[ch] ?: continue
-            pix(c, ox, oy, p, gx + x, gy + y, col)
+    private fun drawPortrait(c: Canvas, ox: Float, oy: Float, p: Float, now: Long) {
+        val fx = FX; val fy = FY   // portrait top-left in scene coords
+        // frame: dark iron + gold trim, LoL-style portrait plate
+        rect(c, ox, oy, p, fx - 3, fy - 3, N + 6, N + 6, Color.rgb(28, 22, 18))
+        rect(c, ox, oy, p, fx - 2, fy - 2, N + 4, N + 4, GOLD_D)
+        rect(c, ox, oy, p, fx - 1, fy - 1, N + 2, N + 2, GOLD)
+        for ((cx, cy) in listOf(fx - 3 to fy - 3, fx + N to fy - 3, fx - 3 to fy + N, fx + N to fy + N)) {
+            rect(c, ox, oy, p, cx, cy, 3, 3, GOLD); rect(c, ox, oy, p, cx + 1, cy + 1, 1, 1, Color.rgb(170, 40, 40))
         }
+        // backdrop with flickering warm glow
+        val glow = ((now / 160) % 3).toInt()
+        rect(c, ox, oy, p, fx, fy, N, N, Color.rgb(30 + glow * 2, 24 + glow, 30))
+        rect(c, ox, oy, p, fx, fy + 8, N, 30, Color.rgb(40 + glow * 3, 30 + glow, 32))
 
-        // eyes
-        if (now > nextBlink) { blinkUntil = now + 140; nextBlink = now + 2500 + Random.nextLong(3500) }
-        val blinking = now < blinkUntil
-        val stern = status.blocking && mood != GuardMood.SPEAKING
-        for (ex in intArrayOf(10, 20)) {
-            if (sleeping || blinking) {
-                for (dx in 0..1) pix(c, ox, oy, p, gx + ex + dx, gy + 14, K)
-            } else {
-                pix(c, ox, oy, p, gx + ex, gy + 12, Color.WHITE); pix(c, ox, oy, p, gx + ex + 1, gy + 12, K)
-                for (dy in 13..14) for (dx in 0..1) pix(c, ox, oy, p, gx + ex + dx, gy + dy, K)
-                if (mood == GuardMood.ALERT || mood == GuardMood.LISTENING) {
-                    // wide-eyed: extra highlight
-                    pix(c, ox, oy, p, gx + ex + 1, gy + 13, Color.WHITE)
-                }
-            }
-        }
-        if (stern && !sleeping) { // angled brows
-            pix(c, ox, oy, p, gx + 9, gy + 11, K); pix(c, ox, oy, p, gx + 10, gy + 11, K)
-            pix(c, ox, oy, p, gx + 22, gy + 11, K); pix(c, ox, oy, p, gx + 21, gy + 11, K)
-        }
-        // cheeks
-        pix(c, ox, oy, p, gx + 9, gy + 15, BLUSH); pix(c, ox, oy, p, gx + 22, gy + 15, BLUSH)
-
-        // mouth
-        val talking = mood == GuardMood.SPEAKING && (now / 130) % 2 == 0L
-        when {
-            talking -> {
-                for (x in 14..17) pix(c, ox, oy, p, gx + x, gy + 16, K)
-                pix(c, ox, oy, p, gx + 15, gy + 17, MOUTH); pix(c, ox, oy, p, gx + 16, gy + 17, MOUTH)
-            }
-            mood == GuardMood.THINKING -> { pix(c, ox, oy, p, gx + 15, gy + 16, K) }
-            stern -> for (x in 14..17) pix(c, ox, oy, p, gx + x, gy + 16, K)
-            else -> { // smile
-                pix(c, ox, oy, p, gx + 14, gy + 15, K); pix(c, ox, oy, p, gx + 17, gy + 15, K)
-                pix(c, ox, oy, p, gx + 15, gy + 16, K); pix(c, ox, oy, p, gx + 16, gy + 16, K)
+        buildFace(now)
+        val breathe = if (mood == GuardMood.SLEEPING) ((now / 1100) % 2).toInt() else ((now / 1400) % 2).toInt()
+        for (y in 0 until N) {
+            val ty = y + breathe
+            if (ty >= N) continue
+            val row = face[y]
+            for (x in 0 until N) {
+                val col = PAL[row[x]] ?: continue
+                rect(c, ox, oy, p, fx + x, fy + ty, 1, 1, col)
             }
         }
 
-        // spear
-        val shaft = Color.rgb(107, 66, 38); val steel = Color.rgb(200, 208, 216)
-        val steelD = Color.rgb(138, 150, 164); val gold = Color.rgb(240, 192, 64)
-        if (status.blocking && !sleeping) {
-            // held horizontally across the body: "none shall pass"
-            val y = gy + 25
-            for (x in 1..38) pix(c, ox, oy, p, gx - 4 + x + 4, y, shaft)
-            val bx = gx - 4
-            pix(c, ox, oy, p, bx + 1, y, steel); pix(c, ox, oy, p, bx + 2, y - 1, steel); pix(c, ox, oy, p, bx + 2, y, Color.WHITE)
-            pix(c, ox, oy, p, bx + 2, y + 1, steelD); pix(c, ox, oy, p, bx + 3, y - 1, steel); pix(c, ox, oy, p, bx + 3, y, steel)
-            pix(c, ox, oy, p, bx + 3, y + 1, steelD); pix(c, ox, oy, p, bx + 4, y, steelD)
-            for (dy in -1..1) pix(c, ox, oy, p, bx + 5, y + dy, gold)
-        } else {
-            val x = gx + 27
-            val top = gy + if (sleeping) 3 else 0
-            for (y in top + 5..gy + 34) pix(c, ox, oy, p, x, y, shaft)
-            pix(c, ox, oy, p, x, top, steel)
-            pix(c, ox, oy, p, x - 1, top + 1, steel); pix(c, ox, oy, p, x, top + 1, Color.WHITE); pix(c, ox, oy, p, x + 1, top + 1, steelD)
-            pix(c, ox, oy, p, x - 1, top + 2, steel); pix(c, ox, oy, p, x, top + 2, steel); pix(c, ox, oy, p, x + 1, top + 2, steelD)
-            pix(c, ox, oy, p, x, top + 3, steelD)
-            for (dx in -1..1) pix(c, ox, oy, p, x + dx, top + 4, gold)
-        }
-
-        // mood icons above head
+        // mood icons inside the frame, top-right
         when (mood) {
-            GuardMood.ALERT -> { // "!"
-                rect(c, ox, oy, p, gx + 26, gy - 1 - 7, 2, 5, Color.rgb(255, 220, 90))
-                rect(c, ox, oy, p, gx + 26, gy - 1, 2, 2, Color.rgb(255, 220, 90))
+            GuardMood.ALERT -> {
+                rect(c, ox, oy, p, fx + 42, fy + 2, 2, 6, Color.rgb(255, 220, 90))
+                rect(c, ox, oy, p, fx + 42, fy + 9, 2, 2, Color.rgb(255, 220, 90))
             }
-            GuardMood.SLEEPING -> {
-                val zy = gy - 4 - ((now / 500) % 3).toInt()
-                drawZ(c, ox, oy, p, gx + 24, zy)
-            }
+            GuardMood.SLEEPING -> drawZ(c, ox, oy, p, fx + 40, fy + 2 + ((now / 500) % 3).toInt())
             else -> {}
         }
     }
 
+    private fun buildFace(now: Long) {
+        for (y in 0 until N) BASE[y].toCharArray(face[y])
+
+        // blink + idle glances
+        if (now > nextBlink) { blinkUntil = now + 150; nextBlink = now + 2800 + Random.nextLong(3500) }
+        if (now > nextLook) { look = listOf(0, 0, -1, 1).random(); nextLook = now + 2500 + Random.nextLong(4000) }
+        val blinking = now < blinkUntil
+        val stern = status.blocking
+
+        val eyeMode = when {
+            mood == GuardMood.SLEEPING || blinking -> EyeMode.CLOSED
+            mood == GuardMood.ALERT -> EyeMode.WIDE
+            else -> EyeMode.OPEN
+        }
+        val eyeLook = when (mood) {
+            GuardMood.THINKING -> 1
+            GuardMood.IDLE -> look
+            else -> 0
+        }
+        eyes(eyeMode, eyeLook)
+        brows(stern && mood != GuardMood.SLEEPING)
+        val talking = mood == GuardMood.SPEAKING && (now / 140) % 2 == 0L
+        mouth(when {
+            talking -> MouthMode.OPEN
+            stern && mood != GuardMood.SLEEPING -> MouthMode.FROWN
+            else -> MouthMode.CLOSED
+        })
+    }
+
+    private fun put(x: Int, y: Int, ch: Char) { if (x in 0 until N && y in 0 until N) face[y][x] = ch }
+
+    private enum class EyeMode { OPEN, CLOSED, WIDE }
+    private enum class MouthMode { CLOSED, OPEN, FROWN }
+
+    private fun eyes(mode: EyeMode, look: Int) {
+        for (ex in intArrayOf(16, 27)) {
+            if (mode == EyeMode.CLOSED) {
+                for (x in ex until ex + 5) put(x, 24, 'n')
+                put(ex, 23, 'f'); put(ex + 4, 23, 'f')
+                continue
+            }
+            val wide = mode == EyeMode.WIDE
+            val top = if (wide) 22 else 23
+            for (y in top..25) for (x in ex until ex + 5) put(x, y, 'E')
+            put(ex, 25, 'f'); put(ex + 4, 25, 'f')
+            if (!wide) { put(ex, 23, 'f'); put(ex + 4, 23, 'f') }
+            val ix = ex + 1 + look
+            for (y in if (wide) 23..25 else 23..24) { put(ix, y, 'I'); put(ix + 1, y, 'I') }
+            put(ix + 1, 24, 'K')
+            if (wide) put(ix, 23, 'E')
+            for (x in ex until ex + 5) put(x, top - 1, 'n')
+        }
+    }
+
+    private fun brows(stern: Boolean) {
+        for ((i, x) in (14..21).withIndex()) {
+            val y = if (!stern || i < 4) 20 else 21
+            put(x, y, 'W'); put(x, y + 1, 'G')
+            if (stern && i >= 4) put(x, 20, 'f')
+        }
+        for ((i, x) in (26..33).withIndex()) {
+            val y = if (stern && i < 4) 21 else 20
+            put(x, y, 'W'); put(x, y + 1, 'G')
+            if (stern && i < 4) put(x, 20, 'f')
+        }
+        for (x in intArrayOf(15, 18, 20, 27, 29, 32)) put(x, 19, 'G')
+        put(13, 20, 'G'); put(34, 20, 'G')
+        put(29, 21, 'X')
+    }
+
+    private fun mouth(mode: MouthMode) {
+        when (mode) {
+            MouthMode.CLOSED -> for (x in 22..25) put(x, 33, 'g')
+            MouthMode.OPEN -> {
+                for (x in 21..26) { put(x, 32, 'M'); put(x, 33, 'M'); put(x, 34, 'M') }
+                put(22, 32, 'T'); put(24, 32, 'T'); put(25, 32, 'T')
+            }
+            MouthMode.FROWN -> {
+                for (x in 21..26) put(x, 33, 'M')
+                put(20, 34, 'M'); put(27, 34, 'M')
+            }
+        }
+    }
+
     private fun drawZ(c: Canvas, ox: Float, oy: Float, p: Float, x: Int, y: Int) {
-        val col = Color.rgb(200, 200, 230)
+        val col = Color.rgb(210, 210, 235)
         rect(c, ox, oy, p, x, y, 4, 1, col)
-        pix(c, ox, oy, p, x + 2, y + 1, col); pix(c, ox, oy, p, x + 1, y + 2, col)
+        rect(c, ox, oy, p, x + 2, y + 1, 1, 1, col); rect(c, ox, oy, p, x + 1, y + 2, 1, 1, col)
         rect(c, ox, oy, p, x, y + 3, 4, 1, col)
     }
 
     companion object {
-        const val VW = 48f
-        const val VH = 52f
-        val K = Color.rgb(26, 20, 32)
-        val BLUSH = Color.rgb(240, 140, 140)
-        val MOUTH = Color.rgb(122, 42, 42)
+        const val VW = 64f
+        const val VH = 60f
+        const val N = 48
+        const val FX = 8
+        const val FY = 6
+        val GOLD = Color.rgb(212, 168, 64)
+        val GOLD_D = Color.rgb(130, 96, 34)
 
         val PAL = mapOf(
-            'K' to K, 'S' to Color.rgb(200, 208, 216), 's' to Color.rgb(138, 150, 164),
-            'd' to Color.rgb(86, 96, 110), 'W' to Color.WHITE, 'P' to Color.rgb(216, 58, 58),
-            'p' to Color.rgb(142, 31, 42), 'F' to Color.rgb(242, 194, 155), 'f' to Color.rgb(201, 141, 107),
-            'B' to Color.rgb(47, 95, 179), 'b' to Color.rgb(29, 60, 120), 'G' to Color.rgb(240, 192, 64),
-            'g' to Color.rgb(176, 128, 42), 'L' to Color.rgb(107, 66, 38), 'l' to Color.rgb(67, 40, 26),
+            'K' to Color.rgb(24, 18, 22),
+            'H' to Color.rgb(220, 224, 228),
+            'S' to Color.rgb(168, 176, 186),
+            's' to Color.rgb(118, 126, 138),
+            'd' to Color.rgb(72, 76, 88),
+            'R' to Color.rgb(150, 86, 46),
+            'r' to Color.rgb(100, 58, 36),
+            'C' to Color.rgb(108, 112, 120),
+            'c' to Color.rgb(72, 75, 84),
+            'h' to Color.rgb(146, 150, 158),
+            'D' to Color.rgb(52, 54, 62),
+            'F' to Color.rgb(212, 158, 118),
+            'f' to Color.rgb(172, 116, 86),
+            'n' to Color.rgb(122, 78, 58),
+            'X' to Color.rgb(230, 148, 132),
+            'W' to Color.rgb(232, 228, 220),
+            'G' to Color.rgb(178, 174, 168),
+            'g' to Color.rgb(116, 112, 110),
+            'N' to Color.rgb(196, 112, 92),
+            'M' to Color.rgb(58, 26, 26),
+            'T' to Color.rgb(226, 220, 200),
+            'E' to Color.rgb(236, 226, 204),
+            'I' to Color.rgb(78, 112, 146)
         )
 
-        /** Original 32x35 chibi guard. Eyes, mouth and spear are drawn as overlays. */
-        val BODY = arrayOf(
-            "...............KKK..............",
-            "..............KPPPK.............",
-            ".............KPPPPpK............",
-            ".............KPPPppK............",
-            "..........KKKKKPpKKKKK..........",
-            "........KKSSSSSKKSSSSsKK........",
-            ".......KSSSSSSSSSSSSSSssK.......",
-            "......KSSSWWSSSSSSSSSSsssK......",
-            "......KSSWSSSSSSSSSSSSsssK......",
-            ".....KSSSSSSSSSSSSSSSSSsssK.....",
-            ".....KddddddddddddddddddddK.....",
-            ".....KsKFFFFFFFFFFFFFFFFKsK.....",
-            ".....KsKFFFFFFFFFFFFFFFFKsK.....",
-            ".....KsKFFFFFFFFFFFFFFFFKsK.....",
-            ".....KsKFFFFFFFFFFFFFFFFKsK.....",
-            ".....KsKFFFFFFFFFFFFFFFFKsK.....",
-            ".....KsKfFFFFFFFFFFFFFFfKsK.....",
-            ".....KdKKfFFFFFFFFFFFFfKKdK.....",
-            "......KKdKKKKKKKKKKKKKKdKK......",
-            ".......KKsssKKKKKKKKsssKK.......",
-            "....KKKSSSsKBBBBBBBBKsSSSKKK....",
-            "...KSSSSssKBBBBGGBBBBKssSSSSK...",
-            "...KSsssssKBBBGggGBBBKsssssSK...",
-            "...KKKKKKKKBBBBGGBBBBKKKKKKKK...",
-            "....KFFFKKBBBBBBBBBBBBKKFFFK....",
-            "....KFFfKBBBBBBBBBBBBBBKfFFK....",
-            "....KKKKKLLLLLLGGLLLLLLKKKKK....",
-            ".........KBBBBBbbBBBBBK.........",
-            ".........KBBBBbbbbBBBBK.........",
-            ".........KbBBBbKKbBBBbK.........",
-            "..........KKKKKK.KKKKKK.........",
-            "..........KssssK.KssssK.........",
-            "..........KsSSsK.KsSSsK.........",
-            ".........KLLLLLK.KLLLLLK........",
-            ".........KKKKKKK.KKKKKKK........",
+        /** Original 48x48 veteran guard portrait. Eyes, brows and mouth are overlays. */
+        val BASE = arrayOf(
+            "...................KKKKKKKKKK...................",
+            "................KKKSSSSHSsSSSKKK................",
+            "..............KKSSSSSSSHSsSSSSSsKK..............",
+            "............KKSSSSSSSSSHSsSSSSSsssKK............",
+            "...........KSSSSHHHHSSSHSsSSSSSsssssK...........",
+            "..........KSSSSHHHHHHSSHSsSSSSSRssssdK..........",
+            ".........KSSSSSHHHHHHSSHSsSSSSSrRsssddK.........",
+            "........KSSSSSSSHHHHSSSHSsSSSSSsssssdddK........",
+            "........KSSSSSSSSSSSSSSHSsSSSSSsssssdddK........",
+            ".......KSSSSSSSSSSddSSSHSsSSSSSsssssddddK.......",
+            ".......KSSSSSSSSSdSSSSSHSsSSSSSsssssddddK.......",
+            "......KSSSSSRSSSSSSSSSSHSsSSSSSsssssrddddK......",
+            "......KSSSSSSrSSSSSSSSSHSsSSRSSsssssdddddK......",
+            "......KssssssssssssssssHSsssssssssssdddddK......",
+            "......KssssssssssssssssHSsssssssssssdddddK......",
+            "......KssssssssssssssssssssssssssssssssssK......",
+            "......KssHsssHsssHsssHsssHsssHsssHsssHsssK......",
+            "......KddddddddddddddddHsndddddddddddddddK......",
+            ".......KKCchCffffffffffHsnfffffffffhCCcKK.......",
+            "........KcDCcfFFFFFFFFFHsnFFXFFFFffCccDK........",
+            ".......KCcCChfFFFFFFFFFHsnFFFXFFFffChcCcK.......",
+            ".......KcDccCfFFFFFFFFFHsnFFFXFFFffcCDcDK.......",
+            "......KCcCchCfFfffffffFSsnfffffffffhCCcCcK......",
+            "......KcDcDCcfFFFFFFFFFSsnFFFFXFFffCccDcDK......",
+            "......KcCcCChfFfFFFFFFFSsnFFFFXFfffChcCcCK......",
+            ".....KcDcDccCfFFFFFFFFFSsnFFFFFXFffcCDcDcDK.....",
+            ".....KcCcCchCfFfffffffFSsnfffffXfffhCCcCcCK.....",
+            ".....KDcDcDCcfFFfFFFfFFsdnFfFFFfXffCccDcDcK.....",
+            ".....KCcCcCChfFXFfFFFFNNNNFFFFfFXffChcCcCcK.....",
+            ".....KcDcDccCfFFXFFGWWGWWGWWGFFXFffcCDcDcDK.....",
+            ".....KcCcCchCfFFFWGWWGWWGWWGWWGFFffhCCcCcCK.....",
+            ".....KDcDcDCcfFWGGWGGWGGWGGWGGWGGffCccDcDcK.....",
+            ".....KCcCcCChfGGGGGGggggggggGGGGGGfChcCcCcK.....",
+            ".....KcDcDccCfGGGGGGGGGGWGGGGGGGGGfcCDcDcDK.....",
+            ".....KcCcCchCfGGGGGGGGWGGGGGGGGGGGfhCCcCcCK.....",
+            "......KcDcDCcfGGGGGGWGGGGGGGGWGGGGfCccDcDK......",
+            "......KcCcCChfFFgGWGGGGGGGGWGGGgFffChcCcCK......",
+            "......KDcDccCfFFgGgGGgGGgWGgGGggFffcCDcDcK......",
+            ".......KcCchChCFFggGGgGWgGGgGGgFFhChCCcCK.......",
+            "......KKDcDCcCcFFFgGGWGGgGGgGgFFFCcCccDcKK......",
+            ".....KCcCcCChChCFFFgGgGGgGGggFFFhChChcCcCcK.....",
+            ".....KcDcDccCcCcFFFFggGGgGWgFFFFCcCcCDcDcDK.....",
+            "....KCcCcrchChChChChCgGGWGghChChChChCCrCcCcK....",
+            "....KcDcDrDCcCcCcCcCcCgGggcCcCcCcCcCccrcDcDK....",
+            "...KCcCcCrCChChChChChChChChChChChChChcrcCcCcK...",
+            "...KcDcDcDrcCcCcCcCcCcCcCcCcCcCcCcCcCrcDcDcDK...",
+            "..KCcCcCcCrhChChChChChChChChChChChChCrcCcCcCcK..",
+            "..KcDcDcDcrCcCcCcCcCcCcCcCcCcCcCcCcCcrDcDcDcDK..",
         )
     }
 }

@@ -45,7 +45,7 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
         setContentView(view)
         hideSystemUi()
 
-        voice = Voice(this)
+        voice = Voice(this, prefs)
         sentry = Sentry(prefs, voice, ClaudeClient(), lifecycleScope, this)
         refresh()
         view.bubbleText = sentry.idleText()
@@ -56,6 +56,7 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
             onStatusChanged = { refresh(); if (!sentry.busy) view.bubbleText = sentry.idleText() },
             onSay = { wake(); sentry.announce(it) },
             onTest = { wake(); sentry.onVisitor(Sighting(1, emptyList(), null)) },
+            voices = { voice.voiceList() },
         ).also { it.start() }
 
         requestPerms()

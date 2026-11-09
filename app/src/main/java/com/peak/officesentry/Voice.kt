@@ -19,7 +19,39 @@ import java.util.concurrent.ConcurrentHashMap
  * Bluetooth speaker) and speech-to-text via Android's SpeechRecognizer.
  * Must be created and used on the main thread.
  */
-class Voice(private val ctx: Context) {
+class Voice(private val ctx: Context, private val prefs: Prefs) {
+    data class VoiceInfo(val name: String, val label: String)
+
+    /** English voices installed in the TTS engine, best quality first. Thread-safe snapshot. */
+    @Volatile var available: List<VoiceInfo> = emptyList(); private set
+
+    private fun loadVoices() {
+        available = runCatching {
+            tts.voices.orEmpty()
+                .filter { it.locale.language == "en" && !it.features.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }
+                .sortedWith(compareBy({ it.locale.country != "US" }, { -it.quality }, { it.name }))
+                .map { v ->
+                    val where = if (v.isNetworkConnectionRequired) "online" else "offline"
+                    VoiceInfo(v.name, "${v.locale.displayCountry} • ${v.name} ($where)")
+                }
+        }.getOrDefault(emptyList())
+    }
+
+    fun voiceList(): List<VoiceInfo> {
+        if (available.isEmpty() && ready) loadVoices()
+        return available
+    }
+
+    /** Apply the saved voice / pitch / speed. Called before every utterance. */
+    private fun applySettings() {
+        tts.setPitch(prefs.pitch)
+        tts.setSpeechRate(prefs.rate)
+        val name = prefs.voiceName
+        if (name.isNotBlank()) {
+            runCatching { tts.voices?.firstOrNull { it.name == name }?.let { tts.voice = it } }
+        }
+    }
+
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     @Volatile private var ready = false
     private lateinit var tts: TextToSpeech
@@ -29,8 +61,7 @@ class Voice(private val ctx: Context) {
         tts = TextToSpeech(ctx) { st ->
             if (st == TextToSpeech.SUCCESS) {
                 tts.language = Locale.US
-                tts.setPitch(1.15f)
-                tts.setSpeechRate(1.0f)
+                loadVoices()
                 ready = true
             }
         }
@@ -52,6 +83,7 @@ class Voice(private val ctx: Context) {
         val id = UUID.randomUUID().toString()
         val done = CompletableDeferred<Unit>()
         pending[id] = done
+        applySettings()
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), id)
         withTimeoutOrNull(30_000L + text.length * 120L) { done.await() }
         pending.remove(id)
