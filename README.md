@@ -29,3 +29,17 @@ An Android kiosk app for an old phone mounted outside a home office door. A griz
 
 ## Build locally
 Open the folder in Android Studio (Ladybug or newer) and run. CI builds with Gradle 8.10.2, AGP 8.7.3, JDK 17.
+
+## Desk herald (optional): ATOM Voice + ESP32-S3-Touch-LCD-7
+Garrick can also speak *to you* at your desk: visitor arrivals ("Lord James, there is a visitor at the chamber door"), messages left at the door, and calendar reminders from the phone's signed-in Google calendars.
+
+| Device | Role | Firmware |
+|---|---|---|
+| M5Stack ATOM Voice (ATOM Echo) | Desk speaker. Streams each line from the phone and starts at a shared time | `Garrick-ATOM-Voice.bin` |
+| Waveshare ESP32-S3-Touch-LCD-7 | Voice lines that move with his speech, caption, status, touch status buttons | `Garrick-Desk-Panel.bin` |
+
+**Flash:** open https://espressif.github.io/esptool-js/ in Chrome, connect the device over USB, add the `.bin` at address **0x0**, and click Program. (On the Touch-LCD-7, use the port labeled **UART1**.)
+
+**Setup:** on first boot each device opens a Wi-Fi hotspot (`Garrick-Voice-Setup` / `Garrick-Panel-Setup`). Join it, choose your Wi-Fi, and enter the phone's IP and the Office Sentry PIN (if set). Give the phone a **DHCP reservation** so its IP never changes.
+
+**Reset setup:** ATOM: hold its button while plugging in, for 5 s. Panel: hold a finger on the top-left corner for 8 s.
