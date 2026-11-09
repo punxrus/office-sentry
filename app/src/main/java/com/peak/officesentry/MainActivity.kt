@@ -21,7 +21,9 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -35,6 +37,9 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
     private lateinit var sentry: Sentry
     private var detector: Detector? = null
     private var server: ControlServer? = null
+    private lateinit var desk: DeskLink
+    private lateinit var calendar: CalendarWatcher
+    @Volatile private var currentMood = GuardMood.IDLE
 
     @Volatile private var lastActivity = SystemClock.uptimeMillis()
     private var dimmed = false
@@ -48,7 +53,10 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
         hideSystemUi()
 
         voice = Voice(this, prefs)
-        sentry = Sentry(prefs, voice, ClaudeClient(), lifecycleScope, this)
+        val claude = ClaudeClient()
+        desk = DeskLink(this, prefs, claude, lifecycleScope)
+        calendar = CalendarWatcher(this, prefs, desk)
+        sentry = Sentry(prefs, voice, claude, lifecycleScope, this, desk)
         refresh()
         view.bubbleText = sentry.idleText()
         setupOwnerGesture()
@@ -59,16 +67,28 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
             onSay = { wake(); sentry.announce(it) },
             onTest = { wake(); sentry.onVisitor(Sighting(1, emptyList(), null)) },
             voices = { voice.voiceList() },
+            desk = desk,
+            liveState = {
+                val seen = detector?.lastFaceSeen ?: 0L
+                val visitor = seen > 0 && SystemClock.uptimeMillis() - seen < 10_000
+                "\"mood\":\"${currentMood.name}\",\"visitor\":$visitor"
+            },
         ).also { it.start() }
 
         requestPerms()
         startIdleLoop()
+        lifecycleScope.launch {
+            while (true) {
+                withContext(Dispatchers.IO) { calendar.check() }
+                delay(60_000)
+            }
+        }
     }
 
     // ---------------- permissions + camera ----------------
 
     private fun requestPerms() {
-        val needed = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+        val needed = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_CALENDAR)
             .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isEmpty()) startCamera() else requestPermissions(needed.toTypedArray(), 1)
     }
@@ -105,7 +125,7 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
 
     // ---------------- Sentry.Ui ----------------
 
-    override fun setMood(m: GuardMood) = runOnUiThread { view.mood = m }
+    override fun setMood(m: GuardMood) { currentMood = m; runOnUiThread { view.mood = m } }
     override fun setBubble(text: String) = runOnUiThread { view.bubbleText = text }
     override fun refresh() = runOnUiThread {
         view.status = prefs.status
@@ -295,7 +315,7 @@ class MainActivity : AppCompatActivity(), Sentry.Ui {
     }
 
     override fun onDestroy() {
-        server?.stop(); detector?.shutdown(); voice.shutdown()
+        server?.stop(); detector?.shutdown(); voice.shutdown(); desk.shutdown()
         super.onDestroy()
     }
 

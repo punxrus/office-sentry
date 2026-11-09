@@ -27,6 +27,9 @@ class ControlServer(
     private val onSay: (String) -> Unit,
     private val onTest: () -> Unit,
     private val voices: () -> List<Voice.VoiceInfo>,
+    private val desk: DeskLink,
+    /** Extra live JSON fields for /api/state, e.g. "\"mood\":\"IDLE\",\"visitor\":false" */
+    private val liveState: () -> String,
 ) {
     private var server: ServerSocket? = null
     private val main = Handler(Looper.getMainLooper())
@@ -71,6 +74,7 @@ class ControlServer(
         val path = fullPath.substringBefore("?")
         val form = parseForm(if (method == "POST") body else fullPath.substringAfter("?", ""))
         val out = s.getOutputStream()
+        val remoteIp = s.inetAddress?.hostAddress ?: ""
 
         // Optional PIN gate for anything that changes state
         val pinOk = prefs.pin.isBlank() || form["pin"] == prefs.pin
@@ -78,6 +82,10 @@ class ControlServer(
         when {
             method == "GET" && path == "/" -> respond(out, 200, "text/html; charset=utf-8", page())
             method == "GET" && path == "/api/state" -> respond(out, 200, "application/json", stateJson())
+            method == "GET" && path.startsWith("/audio/") && path.endsWith(".wav") -> {
+                val f = desk.audioFile(path.removePrefix("/audio/").removeSuffix(".wav"))
+                if (f == null) respond(out, 404, "text/plain", "gone") else respondFile(out, "audio/wav", f)
+            }
             method == "POST" && !pinOk -> respond(out, 403, "text/html; charset=utf-8", "<h2>Wrong PIN</h2><a href='/'>Back</a>")
             method == "POST" && path == "/status" -> {
                 form["status"]?.let { runCatching { prefs.status = Status.valueOf(it) } }
@@ -86,6 +94,21 @@ class ControlServer(
             }
             method == "POST" && path == "/say" -> {
                 form["text"]?.takeIf { it.isNotBlank() }?.let { t -> main.post { onSay(t.take(300)) } }
+                redirect(out)
+            }
+            method == "POST" && path == "/api/register" -> {
+                desk.register(form["role"].orEmpty(), form["ip"]?.takeIf { it.isNotBlank() } ?: remoteIp)
+                respond(out, 200, "application/json", "{\"ok\":true}")
+            }
+            method == "POST" && path == "/desk/test" -> {
+                desk.announce("test", "", "Lord ${prefs.ownerName}, your desk herald stands ready.")
+                redirect(out)
+            }
+            method == "POST" && path == "/desk/settings" -> {
+                prefs.deskEnabled = form["desk"] == "on"
+                prefs.calEnabled = form["cal"] == "on"
+                form["calLead"]?.toIntOrNull()?.let { prefs.calLeadMin = it }
+                form["deskVol"]?.toIntOrNull()?.let { prefs.deskVolume = it }
                 redirect(out)
             }
             method == "POST" && path == "/test" -> { main.post { onTest() }; redirect(out) }
@@ -122,11 +145,25 @@ class ControlServer(
         out.write(head.toByteArray()); out.write(bytes); out.flush()
     }
 
+    private fun respondFile(out: OutputStream, type: String, f: java.io.File) {
+        val head = "HTTP/1.1 200 OK\r\nContent-Type: $type\r\nContent-Length: ${f.length()}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+        out.write(head.toByteArray())
+        f.inputStream().use { it.copyTo(out, 8192) }
+        out.flush()
+    }
+
     private fun redirect(out: OutputStream) {
         out.write("HTTP/1.1 303 See Other\r\nLocation: /\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray()); out.flush()
     }
 
     private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+    private fun devLine(role: String): String {
+        val d = desk.devices[role] ?: return "<span class='warn'>not connected</span>"
+        val ago = (System.currentTimeMillis() - d.seen) / 1000
+        val ok = desk.online(role) != null
+        return "<span class='${if (ok) "ok" else "warn"}'>${esc(d.ip)} (seen ${ago}s ago)</span>"
+    }
 
     private fun voiceOptions(): String {
         val cur = prefs.voiceName
@@ -139,7 +176,8 @@ class ControlServer(
 
     private fun stateJson(): String {
         val msgs = prefs.messages().joinToString(",") { "{\"t\":${it.time},\"m\":\"${it.text.replace("\\", "\\\\").replace("\"", "\\\"")}\"}" }
-        return "{\"status\":\"${prefs.status.name}\",\"note\":\"${prefs.note.replace("\"", "\\\"")}\",\"messages\":[$msgs]}"
+        val live = liveState().let { if (it.isBlank()) "" else ",$it" }
+        return "{\"status\":\"${prefs.status.name}\",\"label\":\"${prefs.status.label}\",\"note\":\"${prefs.note.replace("\"", "\\\"")}\",\"owner\":\"${prefs.ownerName.replace("\"", "")}\",\"guard\":\"${prefs.guardName.replace("\"", "")}\",\"messages\":[$msgs]$live}"
     }
 
     private fun page(): String {
@@ -181,6 +219,18 @@ $pinField <button class='go'>Say it</button></form>
 <h2>Messages left by visitors</h2>
 <div class='card'><ul>$msgs</ul>
 <form method='post' action='/messages/clear'>$pinField <button class='go' style='background:#8e1f2a'>Clear messages</button></form></div>
+
+<h2>Desk herald (ATOM Voice + panel)</h2>
+<div class='card'>
+<p>Speaker: ${devLine("voice")}<br>Panel: ${devLine("panel")}</p>
+<form method='post' action='/desk/settings'>
+<label><input type='checkbox' name='desk' ${chk(prefs.deskEnabled)}> Announce visitors, messages and reminders at my desk</label>
+<label><input type='checkbox' name='cal' ${chk(prefs.calEnabled)}> Calendar reminders (phone's signed-in calendars)</label>
+<label>Remind me this many minutes before events<input type='number' name='calLead' min='1' max='120' value='${prefs.calLeadMin}'></label>
+<label>Speaker volume %<input type='number' name='deskVol' min='10' max='200' value='${prefs.deskVolume}'></label>
+$pinField <button class='go'>Save desk settings</button></form>
+<form method='post' action='/desk/test' style='margin-top:10px'>$pinField <button class='go' style='background:#7a5a1e'>&#128264; Test desk announcement</button></form>
+</div>
 
 <h2>Settings</h2>
 <div class='card'><form method='post' action='/settings'>

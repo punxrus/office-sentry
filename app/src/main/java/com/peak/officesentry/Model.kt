@@ -93,6 +93,24 @@ class Prefs(ctx: Context) {
     var rate: Float
         get() = sp.getFloat("rate", 0.9f)
         set(v) = sp.edit().putFloat("rate", v.coerceIn(0.5f, 1.6f)).apply()
+    // ---- desk (ATOM Voice speaker + Touch-LCD-7 panel) ----
+    var deskEnabled: Boolean
+        get() = sp.getBoolean("desk", true)
+        set(v) = sp.edit().putBoolean("desk", v).apply()
+    /** Speaker gain in percent (100 = normal, up to 200 with soft clipping on the ATOM). */
+    var deskVolume: Int
+        get() = sp.getInt("deskVol", 120)
+        set(v) = sp.edit().putInt("deskVol", v.coerceIn(10, 200)).apply()
+    var calEnabled: Boolean
+        get() = sp.getBoolean("cal", true)
+        set(v) = sp.edit().putBoolean("cal", v).apply()
+    var calLeadMin: Int
+        get() = sp.getInt("calLead", 15)
+        set(v) = sp.edit().putInt("calLead", v.coerceIn(1, 120)).apply()
+    var announced: Set<String>
+        get() = HashSet(sp.getStringSet("announced", emptySet()) ?: emptySet())
+        set(v) = sp.edit().putStringSet("announced", HashSet(v)).apply()
+
     var kiosk: Boolean
         get() = sp.getBoolean("kiosk", false)
         set(v) = sp.edit().putBoolean("kiosk", v).apply()

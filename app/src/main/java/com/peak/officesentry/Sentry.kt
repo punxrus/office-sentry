@@ -20,6 +20,7 @@ class Sentry(
     private val claude: ClaudeClient,
     private val scope: CoroutineScope,
     private val ui: Ui,
+    private val desk: DeskLink? = null,
 ) {
     interface Ui {
         fun setMood(m: GuardMood)
@@ -37,6 +38,11 @@ class Sentry(
     /** Called when the detector confirms a visitor. */
     fun onVisitor(s: Sighting) {
         if (busy) return
+        if (s.pet == null) desk?.announce(
+            "visitor",
+            if (s.labels.isNotEmpty()) "Camera hints: ${s.labels.take(4).joinToString()}." else "",
+            "Lord ${prefs.ownerName}, there is a visitor at the chamber door."
+        )
         job = scope.launch {
             try {
                 if (s.pet != null) greetPet(s) else converse(s)
@@ -143,7 +149,10 @@ MESSAGE: <the message, written in third person, e.g. "Sarah says dinner is ready
             val reply = claude.chat(key, prefs.model, systemPrompt(), messages)
             messages.put(ClaudeClient.msg("assistant", reply))
             val p = parse(reply)
-            p.message?.let { prefs.addMessage(it); ui.refresh() }
+            p.message?.let {
+                prefs.addMessage(it); ui.refresh()
+                desk?.announce("message", it, "My lord, a message from the door: $it")
+            }
 
             ui.setMood(GuardMood.SPEAKING); ui.setBubble(p.speech)
             voice.speak(p.speech)
