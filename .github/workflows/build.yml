@@ -39,12 +39,12 @@ jobs:
         run: gradle :app:assembleRelease --stacktrace
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk OfficeSentry-${{ github.run_number }}.apk
+        run: cp app/build/outputs/apk/release/app-release.apk OfficeSentry.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: OfficeSentry-apk
-          path: OfficeSentry-*.apk
+          path: OfficeSentry.apk
 
       - name: Publish rolling release
         uses: softprops/action-gh-release@v2
@@ -52,7 +52,7 @@ jobs:
           tag_name: latest
           name: Office Sentry (latest build)
           body: "Build #${{ github.run_number }} from ${{ github.sha }}"
-          files: OfficeSentry-*.apk
+          files: OfficeSentry.apk
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
